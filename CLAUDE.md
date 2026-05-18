@@ -224,35 +224,52 @@ rebalance to break even on costs. Bias toward holding periods that respect this.
 
 ## 7. Current state (as of 2026-05-18)
 
-PR `claude/overhaul-codebase-O7UJJ` ships the factor-research foundation:
+Sprint 1 shipped (merged via PR #4). Sprint 2 partial is in progress on
+branch `claude/overhaul-codebase-O7UJJ`.
 
-- **Deleted** the indicator/composable-strategy paradigm (composable.py,
-  conditions.py, indicators.py, ma_cross, DEMO_UNIVERSE, builder frontend).
-- **Kept and reused** the event-driven backtest engine + T+1 / price-limit /
-  cost layer, walk-forward, regime tagging, attribution, AKShare retry/fallback
-  client, SQLite cache, PIT index membership, synthetic generators.
-- **Added** the `astrategy/factors/` package (Factor ABC, registry,
-  FactorContext) and `astrategy/evaluation/` package (IC, quintile, decay,
+**Sprint 1 (merged)** — factor-research foundation:
+
+- Deleted the indicator/composable-strategy paradigm in full.
+- Kept the event-driven backtest engine + T+1 / price-limit / cost layer,
+  walk-forward, regime tagging, attribution, AKShare retry/fallback client,
+  SQLite cache, PIT index membership, synthetic generators.
+- Added `astrategy/factors/` (Factor ABC, registry, FactorContext with
+  PIT discipline) and `astrategy/evaluation/` (IC, quintile, decay,
   correlation, runner).
-- **Added Factor 1.1 — Northbound Momentum** end-to-end: data → compute → IC /
-  quintile / decay evaluation → cached REST endpoint → React Factor Lab page.
-- **Added alt-data tables**: margin_daily, lhb_disclosure, limit_pool,
-  analyst_estimates (scaffold for Factors 1.3, 1.4, 4.1, 4.2, 2.3).
-- **Added AKShare client methods**: get_northbound_holdings,
-  get_margin_detail, get_lhb_disclosure, get_limit_pool, get_analyst_ratings,
-  each with retry + Chinese-column normalization.
-- **Added loader methods**: prime_northbound_individual, prime_margin,
-  prime_lhb, prime_limit_pools, prime_analyst_estimates.
-- **Rewrote API**: /api/factors, /api/factors/{name}/evaluate.
-- **Rewrote frontend**: single Factor Research Lab view with selector,
-  parameter tuner, IC chart, quintile chart, decay chart, diagnostics panel.
-- **Smoke-script extended** to validate the new endpoints on the owner's Mac.
+- Wired **Factor 1.1 — Northbound Momentum** end-to-end: data → compute →
+  IC / quintile / decay → cached REST endpoint → React Factor Lab page.
+- Added alt-data tables (margin_daily, lhb_disclosure, limit_pool,
+  analyst_estimates) + AKShareClient methods with retry/fallbacks +
+  DataLoader prime_* methods + synthetic generators for each.
 
-**Critical gap closing in progress:** the sandbox running Claude Code can't reach
-eastmoney/sina (403). The owner must run `scripts/smoke_real_akshare.py` and the
-priming scripts on their Mac to validate the real-data path. Everything in this
-sandbox runs against synthetic data, which is for engine testing only — its
-factor evaluations are **noise**, not signal.
+**Sprint 2 partial (on `claude/overhaul-codebase-O7UJJ`, unmerged)** —
+four more factors per CLAUDE.md §12's 90-day plan:
+
+- **Factor 1.2 — `northbound_acceleration`** (flow): second-derivative of
+  Stock Connect flow vs prior window, normalized by float cap.
+- **Factor 2.1 — `earnings_quality`** (fundamental): QoQ ROE delta gated
+  by OCF / NI ≥ 0.7. Requires new OCF + NI columns on the fundamentals
+  table (idempotent ALTER TABLE migration in cache._init_schema).
+- **Factor 2.4 — `valuation_composite`** (fundamental): negative mean of
+  trailing PE / PB / PS percentile vs the stock's own ~3-year history.
+- **Factor 3.2 — `momentum_skip`** (technical): trailing 20-day return
+  with a 5-day skip; the canonical A-share momentum factor per Liu /
+  Stambaugh / Yuan 2019.
+
+Sprint 2 also added four PIT-disciplined accessors on `FactorContext`:
+`bars()`, `fundamentals()`, `recent_fundamentals()`, `valuation_history()`.
+
+API surfaces every factor at `/api/factors`; `/api/factors/{name}/evaluate`
+now accepts per-factor query params (`window`, `gap`, `skip`,
+`min_ocf_ratio`, `history_days`) plus the existing `lookback`.
+
+Test count: **183 passing** (up from 150 after Sprint 1).
+
+**Critical gap closing in progress:** the sandbox running Claude Code can't
+reach eastmoney/sina (403). The owner must run `scripts/smoke_real_akshare.py`
+and the priming scripts on their Mac to validate the real-data path.
+Everything in this sandbox runs against synthetic data, which is for engine
+testing only — its factor evaluations are **noise**, not signal.
 
 ---
 
