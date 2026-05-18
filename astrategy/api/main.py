@@ -24,6 +24,11 @@ from astrategy.api.schemas import (
     StockBar,
     StockOHLCVResponse,
     UniverseResponse,
+    WalkForwardRequest,
+    WalkForwardRunResponse,
+    WalkForwardResultResponse,
+    WalkForwardRunListItem,
+    WindowResultSchema,
 )
 from astrategy.api.storage import RunStorage
 from astrategy.api.strategy_factory import create_strategy, registered_types
@@ -32,7 +37,11 @@ from astrategy.data.cache import SQLiteCache
 from astrategy.data.loader import DataLoader
 from astrategy.data.synthetic import generate_synthetic_ohlcv
 from astrategy.data.universe import DEMO_UNIVERSE
-from astrategy.engine.backtest import Backtester, BacktestConfig
+from astrategy.engine.backtest import Backtester, BacktestConfig, enrich_summary
+from astrategy.engine.walk_forward import (
+    WalkForwardConfig,
+    WalkForwardRunner,
+)
 
 log = logging.getLogger(__name__)
 
@@ -260,6 +269,15 @@ def run_backtest(
         storage.mark_failed(run_id, repr(e))
         raise HTTPException(status_code=500, detail=f"backtest failed: {e}")
 
+    # Phase 5: enrich with factor attribution + regime metrics (best-effort)
+    try:
+        enrich_summary(
+            result, cache, effective_universe,
+            req.config.start, req.config.end,
+        )
+    except Exception as e:
+        log.warning("summary enrichment skipped: %s", e)
+
     storage.save_result(run_id, result)
     return BacktestRunResponse(
         run_id=run_id,
@@ -324,6 +342,148 @@ def list_backtest_runs(
     limit: int = Query(50, ge=1, le=500),
 ) -> list[BacktestRunListItem]:
     return [BacktestRunListItem(**r) for r in storage.list_runs(limit=limit)]
+
+
+# --- Phase 5: walk-forward endpoints -----------------------------------------
+
+@app.post("/api/backtest/walk_forward", response_model=WalkForwardRunResponse, tags=["backtest"])
+def run_walk_forward(
+    body: WalkForwardRequest,
+    loader: Annotated[DataLoader, Depends(get_loader)],
+    storage: Annotated[RunStorage, Depends(get_storage)],
+    cache: Annotated[SQLiteCache, Depends(get_cache)],
+) -> WalkForwardRunResponse:
+    config_dict = body.model_dump()
+    run_id = storage.new_walk_forward_run(config_dict)
+
+    req = body.request
+    wf_spec = body.walk_forward
+
+    # Apply universe filter (mirror /api/backtest/run logic)
+    effective_universe = list(req.universe)
+    if req.universe_filter is not None:
+        uf = req.universe_filter
+        filtered = cache.query_universe(
+            boards=uf.boards, exclude_st=uf.exclude_st,
+            market_cap_min=uf.market_cap_min, market_cap_max=uf.market_cap_max,
+            sectors_l1=uf.sectors_l1, only_codes=req.universe,
+        )
+        effective_universe = filtered
+        if not effective_universe:
+            storage.mark_walk_forward_failed(run_id, "universe filter narrowed to zero stocks")
+            raise HTTPException(status_code=422, detail="universe_filter narrowed the universe to zero stocks")
+
+    data = loader.load_bars(effective_universe, req.config.start, req.config.end)
+    if not data:
+        msg = f"no cached data for any of {effective_universe} in {req.config.start}..{req.config.end}"
+        storage.mark_walk_forward_failed(run_id, msg)
+        raise HTTPException(status_code=404, detail=msg)
+    meta = loader.load_meta(effective_universe)
+
+    base_config = BacktestConfig(
+        start=req.config.start, end=req.config.end,
+        initial_cash=req.config.initial_cash,
+        limit_hit_fill_prob=req.config.limit_hit_fill_prob,
+        random_seed=req.config.random_seed,
+    )
+    wf_config = WalkForwardConfig(
+        train_months=wf_spec.train_months,
+        test_months=wf_spec.test_months,
+        step_months=wf_spec.step_months,
+        min_train_bars=wf_spec.min_train_bars,
+        overfit_gap_threshold=wf_spec.overfit_gap_threshold,
+    )
+
+    def strategy_factory():
+        params = dict(req.strategy.params)
+        if req.strategy.type == "composable":
+            params.setdefault("cache", cache)
+        return create_strategy(req.strategy.type, params)
+
+    try:
+        runner = WalkForwardRunner(base_config, strategy_factory, data, meta, wf_config)
+        result = runner.run()
+    except Exception as e:
+        storage.mark_walk_forward_failed(run_id, repr(e))
+        raise HTTPException(status_code=500, detail=f"walk-forward failed: {e}")
+
+    # Serialize for storage + response
+    payload = {
+        "aggregate_is_sharpe": result.aggregate_is_sharpe,
+        "aggregate_oos_sharpe": result.aggregate_oos_sharpe,
+        "aggregate_gap": result.aggregate_gap,
+        "overfit_flag": result.overfit_flag,
+        "windows": [
+            {
+                "window_idx": w.window_idx,
+                "train_start": w.train_start,
+                "train_end": w.train_end,
+                "test_start": w.test_start,
+                "test_end": w.test_end,
+                "is_summary": w.is_summary,
+                "oos_summary": w.oos_summary,
+                "is_oos_sharpe_gap": w.is_oos_sharpe_gap,
+                "skipped": w.skipped,
+                "skip_reason": w.skip_reason,
+            }
+            for w in result.windows
+        ],
+        "oos_equity_curve": [
+            {"date": str(d.date() if hasattr(d, "date") else d), "equity": float(v)}
+            for d, v in result.oos_equity_curve.items()
+        ],
+    }
+    storage.save_walk_forward_result(run_id, payload)
+
+    return WalkForwardRunResponse(
+        run_id=run_id,
+        status="completed",
+        aggregate_is_sharpe=result.aggregate_is_sharpe,
+        aggregate_oos_sharpe=result.aggregate_oos_sharpe,
+        aggregate_gap=result.aggregate_gap,
+        overfit_flag=result.overfit_flag,
+        n_windows=len(result.windows),
+    )
+
+
+@app.get(
+    "/api/backtest/walk_forward/{run_id}",
+    response_model=WalkForwardResultResponse,
+    tags=["backtest"],
+)
+def get_walk_forward_result(
+    run_id: str,
+    storage: Annotated[RunStorage, Depends(get_storage)],
+) -> WalkForwardResultResponse:
+    row = storage.get_walk_forward_run(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"walk-forward run {run_id} not found")
+    res = row.get("result") or {}
+    request = WalkForwardRequest.model_validate(row["config"])
+    return WalkForwardResultResponse(
+        run_id=row["id"],
+        status=row["status"],
+        request=request,
+        aggregate_is_sharpe=res.get("aggregate_is_sharpe", 0.0),
+        aggregate_oos_sharpe=res.get("aggregate_oos_sharpe", 0.0),
+        aggregate_gap=res.get("aggregate_gap", 0.0),
+        overfit_flag=res.get("overfit_flag", False),
+        windows=[WindowResultSchema(**w) for w in res.get("windows", [])],
+        oos_equity_curve=[EquityPoint(**p) for p in res.get("oos_equity_curve", [])],
+        error=row.get("error"),
+    )
+
+
+@app.get(
+    "/api/backtest/walk_forward",
+    response_model=list[WalkForwardRunListItem],
+    tags=["backtest"],
+)
+def list_walk_forward_runs(
+    storage: Annotated[RunStorage, Depends(get_storage)],
+    limit: int = Query(50, ge=1, le=500),
+) -> list[WalkForwardRunListItem]:
+    return [WalkForwardRunListItem(**r) for r in storage.list_walk_forward_runs(limit=limit)]
 
 
 # --- helpers -----------------------------------------------------------------

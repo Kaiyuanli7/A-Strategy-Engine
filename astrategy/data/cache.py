@@ -102,6 +102,18 @@ CREATE TABLE IF NOT EXISTS northbound_daily (
     PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_north_date ON northbound_daily(date);
+
+-- Phase 5: point-in-time index membership ------------------------------------
+
+CREATE TABLE IF NOT EXISTS index_constituents_pit (
+    index_code     TEXT NOT NULL,
+    member_code    TEXT NOT NULL,
+    effective_date TEXT NOT NULL,
+    expiry_date    TEXT,
+    PRIMARY KEY (index_code, member_code, effective_date)
+);
+CREATE INDEX IF NOT EXISTS idx_const_pit_eff ON index_constituents_pit(index_code, effective_date);
+CREATE INDEX IF NOT EXISTS idx_const_pit_exp ON index_constituents_pit(index_code, expiry_date);
 """
 
 
@@ -402,6 +414,74 @@ class SQLiteCache:
             )
         if not df.empty:
             df["date"] = pd.to_datetime(df["date"])
+        return df
+
+    # ----- Phase 5: point-in-time index membership ------------------------
+
+    def upsert_index_member(
+        self,
+        index_code: str,
+        member_code: str,
+        effective_date: str,
+        expiry_date: str | None = None,
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO index_constituents_pit "
+                "(index_code, member_code, effective_date, expiry_date) "
+                "VALUES (?, ?, ?, ?)",
+                (index_code, member_code, effective_date, expiry_date),
+            )
+
+    def upsert_index_members(
+        self, index_code: str, rows: list[tuple[str, str, str | None]]
+    ) -> int:
+        """Bulk insert. rows = list of (member_code, effective_date, expiry_date)."""
+        if not rows:
+            return 0
+        payload = [(index_code, c, eff, exp) for c, eff, exp in rows]
+        with self._conn() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO index_constituents_pit "
+                "(index_code, member_code, effective_date, expiry_date) "
+                "VALUES (?, ?, ?, ?)",
+                payload,
+            )
+        return len(payload)
+
+    def get_index_constituents_as_of(
+        self, index_code: str, as_of_date: str
+    ) -> list[str]:
+        """Codes where effective_date <= as_of_date < (expiry_date OR ∞)."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT member_code FROM index_constituents_pit "
+                "WHERE index_code = ? AND effective_date <= ? "
+                "AND (expiry_date IS NULL OR expiry_date > ?) "
+                "ORDER BY member_code",
+                (index_code, as_of_date, as_of_date),
+            ).fetchall()
+        return [r["member_code"] for r in rows]
+
+    def get_index_members_ever(self, index_code: str) -> list[str]:
+        """All codes that were ever in the index (union over time)."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT member_code FROM index_constituents_pit "
+                "WHERE index_code = ? ORDER BY member_code",
+                (index_code,),
+            ).fetchall()
+        return [r["member_code"] for r in rows]
+
+    def get_index_member_history(self, index_code: str) -> pd.DataFrame:
+        with self._conn() as conn:
+            df = pd.read_sql_query(
+                "SELECT member_code, effective_date, expiry_date "
+                "FROM index_constituents_pit WHERE index_code = ? "
+                "ORDER BY effective_date, member_code",
+                conn,
+                params=(index_code,),
+            )
         return df
 
     def query_universe(

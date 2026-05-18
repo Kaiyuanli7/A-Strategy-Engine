@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { api } from '@/api/client'
 import EquityChart from '@/components/EquityChart'
 import DrawdownChart from '@/components/DrawdownChart'
+import FactorRegimePanels from '@/components/FactorRegimePanels'
 import FillsTable from '@/components/FillsTable'
 import MetricsPanel from '@/components/MetricsPanel'
 import type { BacktestResult } from '@/types/api'
@@ -62,6 +63,8 @@ export default function Dashboard() {
           <DrawdownChart data={data.equity_curve} />
         </div>
       </div>
+
+      <FactorRegimePanels summary={data.summary} />
 
       <FillsTable fills={data.fills} rejections={data.rejections} />
     </div>

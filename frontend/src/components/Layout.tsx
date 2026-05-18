@@ -34,6 +34,14 @@ export default function Layout() {
               Builder
             </NavLink>
             <NavLink
+              to="/walkforward"
+              className={({ isActive }) =>
+                'nav-link' + (isActive ? ' nav-link-active' : '')
+              }
+            >
+              Walk-Forward
+            </NavLink>
+            <NavLink
               to="/screener"
               className={({ isActive }) =>
                 'nav-link' + (isActive ? ' nav-link-active' : '')

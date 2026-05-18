@@ -9,6 +9,10 @@ import type {
   StockOHLCV,
   Universe,
   UniverseFilter,
+  WalkForwardRequest,
+  WalkForwardResultResponse,
+  WalkForwardRunListItem,
+  WalkForwardRunResponse,
 } from '@/types/api'
 
 const BASE = '' // vite proxy forwards /api → backend in dev; absolute in prod
@@ -60,4 +64,12 @@ export const api = {
     params.set('exclude_st', String(filter.exclude_st))
     return req<ScreenerPreview>(`/api/data/screener/preview?${params.toString()}`)
   },
+  runWalkForward: (body: WalkForwardRequest) =>
+    req<WalkForwardRunResponse>('/api/backtest/walk_forward', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  walkForwardResult: (runId: string) =>
+    req<WalkForwardResultResponse>(`/api/backtest/walk_forward/${runId}`),
+  walkForwardRuns: () => req<WalkForwardRunListItem[]>('/api/backtest/walk_forward'),
 }

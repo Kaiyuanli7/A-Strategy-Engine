@@ -329,6 +329,48 @@ def test_universe_filter_empty_result_422(client: TestClient):
     assert r.status_code == 422
 
 
+def test_walk_forward_completes(client: TestClient):
+    body = {
+        "request": VALID_BACKTEST_REQ,
+        "walk_forward": {"train_months": 12, "test_months": 3, "step_months": 3, "min_train_bars": 100},
+    }
+    r = client.post("/api/backtest/walk_forward", json=body)
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["status"] == "completed"
+    assert payload["n_windows"] >= 1
+    assert "aggregate_oos_sharpe" in payload
+    assert isinstance(payload["overfit_flag"], bool)
+
+
+def test_walk_forward_result_persisted(client: TestClient):
+    body = {
+        "request": VALID_BACKTEST_REQ,
+        "walk_forward": {"train_months": 12, "test_months": 3, "step_months": 3, "min_train_bars": 100},
+    }
+    run = client.post("/api/backtest/walk_forward", json=body).json()
+    run_id = run["run_id"]
+    r = client.get(f"/api/backtest/walk_forward/{run_id}")
+    assert r.status_code == 200
+    detail = r.json()
+    assert detail["run_id"] == run_id
+    assert detail["aggregate_oos_sharpe"] == pytest.approx(run["aggregate_oos_sharpe"], rel=1e-6)
+    assert len(detail["windows"]) == run["n_windows"]
+
+
+def test_walk_forward_list_runs(client: TestClient):
+    body = {
+        "request": VALID_BACKTEST_REQ,
+        "walk_forward": {"train_months": 12, "test_months": 3, "step_months": 3, "min_train_bars": 100},
+    }
+    client.post("/api/backtest/walk_forward", json=body)
+    r = client.get("/api/backtest/walk_forward")
+    assert r.status_code == 200
+    items = r.json()
+    assert len(items) >= 1
+    assert all("aggregate_oos_sharpe" in it for it in items)
+
+
 def test_run_composable_with_pe_bound_no_crash(client: TestClient):
     """Restrictive composable spec returns 200 with possibly zero fills (not 500)."""
     req = {

@@ -44,6 +44,22 @@ class BacktestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class FactorAttribution(BaseModel):
+    alpha_annualized: float
+    loadings: dict[str, float] = Field(default_factory=dict)
+    t_stats: dict[str, float] = Field(default_factory=dict)
+    r_squared: float
+    residual_vol_annualized: float
+    n_obs: int
+
+
+class RegimePerf(BaseModel):
+    n_days: int
+    annualized_return: float
+    sharpe: float
+    max_drawdown: float
+
+
 class BacktestSummary(BaseModel):
     n_bars: int
     initial_equity: float
@@ -62,6 +78,8 @@ class BacktestSummary(BaseModel):
     n_fills: int
     n_rejections: int
     turnover: float
+    factor_attribution: FactorAttribution | None = None
+    regime_metrics: dict[str, RegimePerf] | None = None
 
 
 class BacktestRunResponse(BaseModel):
@@ -152,3 +170,67 @@ class HealthResponse(BaseModel):
     version: str
     cached_stocks: int
     cached_runs: int
+
+
+# --- Phase 5: walk-forward ----------------------------------------------------
+
+class WalkForwardConfigSpec(BaseModel):
+    train_months: int = Field(12, ge=1, le=60)
+    test_months: int = Field(3, ge=1, le=36)
+    step_months: int = Field(3, ge=1, le=36)
+    min_train_bars: int = Field(200, ge=20)
+    overfit_gap_threshold: float = Field(0.5, ge=0.0)
+    model_config = ConfigDict(extra="forbid")
+
+
+class WalkForwardRequest(BaseModel):
+    request: BacktestRequest
+    walk_forward: WalkForwardConfigSpec = Field(default_factory=WalkForwardConfigSpec)
+    model_config = ConfigDict(extra="forbid")
+
+
+class WindowResultSchema(BaseModel):
+    window_idx: int
+    train_start: str
+    train_end: str
+    test_start: str
+    test_end: str
+    is_summary: dict = Field(default_factory=dict)
+    oos_summary: dict = Field(default_factory=dict)
+    is_oos_sharpe_gap: float = 0.0
+    skipped: bool = False
+    skip_reason: str | None = None
+
+
+class WalkForwardRunResponse(BaseModel):
+    run_id: str
+    status: Literal["completed", "failed"]
+    aggregate_is_sharpe: float = 0.0
+    aggregate_oos_sharpe: float = 0.0
+    aggregate_gap: float = 0.0
+    overfit_flag: bool = False
+    n_windows: int = 0
+    error: str | None = None
+
+
+class WalkForwardResultResponse(BaseModel):
+    run_id: str
+    status: str
+    request: WalkForwardRequest
+    aggregate_is_sharpe: float
+    aggregate_oos_sharpe: float
+    aggregate_gap: float
+    overfit_flag: bool
+    windows: list[WindowResultSchema]
+    oos_equity_curve: list[EquityPoint]
+    error: str | None = None
+
+
+class WalkForwardRunListItem(BaseModel):
+    run_id: str
+    status: str
+    strategy_type: str
+    aggregate_oos_sharpe: float | None = None
+    overfit_flag: bool | None = None
+    n_windows: int | None = None
+    created_at: str

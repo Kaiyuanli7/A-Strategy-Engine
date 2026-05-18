@@ -221,3 +221,81 @@ export interface ScreenerPreview {
   count: number
   total: number
 }
+
+// --- Phase 5: walk-forward + factor + regime --------------------------------
+
+export interface FactorAttribution {
+  alpha_annualized: number
+  loadings: Record<string, number>
+  t_stats: Record<string, number>
+  r_squared: number
+  residual_vol_annualized: number
+  n_obs: number
+}
+
+export interface RegimePerf {
+  n_days: number
+  annualized_return: number
+  sharpe: number
+  max_drawdown: number
+}
+
+export interface WalkForwardConfigSpec {
+  train_months: number
+  test_months: number
+  step_months: number
+  min_train_bars: number
+  overfit_gap_threshold: number
+}
+
+export interface WalkForwardRequest {
+  request: BacktestRequest
+  walk_forward: WalkForwardConfigSpec
+}
+
+export interface WindowResultSchema {
+  window_idx: number
+  train_start: string
+  train_end: string
+  test_start: string
+  test_end: string
+  is_summary: Record<string, unknown>
+  oos_summary: Record<string, unknown>
+  is_oos_sharpe_gap: number
+  skipped: boolean
+  skip_reason: string | null
+}
+
+export interface WalkForwardRunResponse {
+  run_id: string
+  status: 'completed' | 'failed'
+  aggregate_is_sharpe: number
+  aggregate_oos_sharpe: number
+  aggregate_gap: number
+  overfit_flag: boolean
+  n_windows: number
+  error: string | null
+}
+
+export interface WalkForwardResultResponse {
+  run_id: string
+  status: string
+  request: WalkForwardRequest
+  aggregate_is_sharpe: number
+  aggregate_oos_sharpe: number
+  aggregate_gap: number
+  overfit_flag: boolean
+  windows: WindowResultSchema[]
+  oos_equity_curve: EquityPoint[]
+  error: string | null
+}
+
+export interface WalkForwardRunListItem {
+  run_id: string
+  status: string
+  strategy_type: string
+  aggregate_oos_sharpe: number | null
+  overfit_flag: boolean | null
+  n_windows: number | null
+  created_at: string
+}

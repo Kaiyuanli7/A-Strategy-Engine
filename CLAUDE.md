@@ -184,19 +184,21 @@ before slippage. Bias toward weekly+ holding periods.
 
 ## 7. Current state (as of 2026-05-18)
 
-Shipped on `claude/ashare-trading-strategy-RegyP` → PR #1 against `main`:
+Shipped (PR #1 + PR #3 merged; Phase 5 on the active feature branch):
 
 - **Phase 1**: data layer + backtest engine with A-share constraints + dual-MA demo
 - **Phase 2**: FastAPI REST server + Pydantic schemas + backtest run persistence
 - **Phase 3**: React/Vite/TS/Tailwind frontend (runs list, results dashboard, screener)
 - **Phase 4**: composable strategies + fundamentals/sector/northbound data + visual builder
+- **Phase 5**: PIT index membership + walk-forward validation + factor attribution +
+  regime tagging + real-AKShare smoke test scaffold
 
-Test suite: 130 passing. Frontend typechecks + builds clean.
+Test suite: 157 passing. Frontend typechecks + builds clean.
 
-**Critical gap:** all backtests so far run on synthetic GBM data because this sandbox
-blocks AKShare's eastmoney/sina endpoints (403). The real-data path exists and is
-implemented correctly but unvalidated against real prices. **Closing this gap is the
-single highest-leverage thing left to do** — see Phase 5.
+**Critical gap closing in progress:** Phase 5 ships the walk-forward + factor + regime
+machinery, but real-data validation still requires the owner to run
+`scripts/smoke_real_akshare.py` and `scripts/prime_csi300.py` locally on a Mac with
+external network access (this sandbox blocks AKShare's eastmoney/sina with 403).
 
 ---
 
