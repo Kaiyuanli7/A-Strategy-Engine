@@ -1,18 +1,10 @@
 import type {
-  BacktestRequest,
-  BacktestResult,
-  BacktestRunListItem,
-  BacktestRunResponse,
-  ConditionTypeMeta,
+  EvaluateParams,
+  FactorEvaluation,
+  FactorMeta,
   Health,
-  ScreenerPreview,
   StockOHLCV,
   Universe,
-  UniverseFilter,
-  WalkForwardRequest,
-  WalkForwardResultResponse,
-  WalkForwardRunListItem,
-  WalkForwardRunResponse,
 } from '@/types/api'
 
 const BASE = '' // vite proxy forwards /api → backend in dev; absolute in prod
@@ -37,7 +29,11 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => req<Health>('/health'),
-  universe: () => req<Universe>('/api/data/universe'),
+  universe: (index = '000300', asOf?: string) => {
+    const qs = new URLSearchParams({ index })
+    if (asOf) qs.set('as_of', asOf)
+    return req<Universe>(`/api/data/universe?${qs.toString()}`)
+  },
   stock: (code: string, start?: string, end?: string) => {
     const params = new URLSearchParams()
     if (start) params.set('start', start)
@@ -45,31 +41,18 @@ export const api = {
     const qs = params.toString()
     return req<StockOHLCV>(`/api/data/stock/${code}${qs ? '?' + qs : ''}`)
   },
-  runs: () => req<BacktestRunListItem[]>('/api/backtest/runs'),
-  result: (runId: string) => req<BacktestResult>(`/api/backtest/results/${runId}`),
-  runBacktest: (body: BacktestRequest) =>
-    req<BacktestRunResponse>('/api/backtest/run', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  conditionTypes: () =>
-    req<{ condition_types: ConditionTypeMeta[] }>('/api/strategies/condition-types'),
   sectors: () => req<{ sectors_l1: string[] }>('/api/data/sectors'),
-  screenerPreview: (filter: UniverseFilter) => {
-    const params = new URLSearchParams()
-    if (filter.boards && filter.boards.length > 0) params.set('boards', filter.boards.join(','))
-    if (filter.sectors_l1 && filter.sectors_l1.length > 0) params.set('sectors_l1', filter.sectors_l1.join(','))
-    if (filter.market_cap_min !== null) params.set('market_cap_min', String(filter.market_cap_min))
-    if (filter.market_cap_max !== null) params.set('market_cap_max', String(filter.market_cap_max))
-    params.set('exclude_st', String(filter.exclude_st))
-    return req<ScreenerPreview>(`/api/data/screener/preview?${params.toString()}`)
+  factors: () => req<FactorMeta[]>('/api/factors'),
+  evaluateFactor: (name: string, params: EvaluateParams) => {
+    const qs = new URLSearchParams({
+      start: params.start,
+      end: params.end,
+      universe: params.universe,
+      horizon: String(params.horizon),
+      rebalance: params.rebalance,
+    })
+    if (params.lookback !== undefined) qs.set('lookback', String(params.lookback))
+    if (params.use_cache !== undefined) qs.set('use_cache', String(params.use_cache))
+    return req<FactorEvaluation>(`/api/factors/${name}/evaluate?${qs.toString()}`)
   },
-  runWalkForward: (body: WalkForwardRequest) =>
-    req<WalkForwardRunResponse>('/api/backtest/walk_forward', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  walkForwardResult: (runId: string) =>
-    req<WalkForwardResultResponse>(`/api/backtest/walk_forward/${runId}`),
-  walkForwardRuns: () => req<WalkForwardRunListItem[]>('/api/backtest/walk_forward'),
 }

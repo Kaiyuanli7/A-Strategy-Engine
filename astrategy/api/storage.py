@@ -59,6 +59,16 @@ CREATE TABLE IF NOT EXISTS walk_forward_runs (
     completed_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_wf_runs_created ON walk_forward_runs(created_at DESC);
+
+-- Factor evaluations (cached IC / quintile / decay results)
+CREATE TABLE IF NOT EXISTS factor_evaluations (
+    factor_name  TEXT NOT NULL,
+    cache_key    TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (factor_name, cache_key)
+);
+CREATE INDEX IF NOT EXISTS idx_factor_eval_created ON factor_evaluations(created_at DESC);
 """
 
 
@@ -263,6 +273,42 @@ class RunStorage:
                 "created_at": r["created_at"],
             })
         return items
+
+
+    # ----- Factor evaluation persistence (cache layer) ---------------------
+
+    @staticmethod
+    def _factor_cache_key(params: dict, config: dict) -> str:
+        """Stable hash of factor params + evaluation config."""
+        import hashlib
+        blob = json.dumps({"params": params, "config": config}, sort_keys=True, default=str)
+        return hashlib.sha256(blob.encode()).hexdigest()[:24]
+
+    def save_factor_evaluation(
+        self, factor_name: str, params: dict, config: dict, payload: dict,
+    ) -> None:
+        key = self._factor_cache_key(params, config)
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO factor_evaluations "
+                "(factor_name, cache_key, payload_json, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (factor_name, key, json.dumps(payload, default=str), datetime.utcnow().isoformat()),
+            )
+
+    def get_factor_evaluation(
+        self, factor_name: str, params: dict, config: dict,
+    ) -> dict | None:
+        key = self._factor_cache_key(params, config)
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT payload_json FROM factor_evaluations "
+                "WHERE factor_name = ? AND cache_key = ?",
+                (factor_name, key),
+            ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row["payload_json"])
 
 
 def _fill_row(run_id: str, seq: int, f: Fill, rejected: str | None) -> tuple:

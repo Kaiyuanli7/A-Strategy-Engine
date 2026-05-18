@@ -1,4 +1,4 @@
-"""Pydantic request/response models for the REST API."""
+"""Pydantic request/response models for the factor research REST API."""
 
 from __future__ import annotations
 
@@ -7,125 +7,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class StrategySpec(BaseModel):
-    """JSON-serializable strategy configuration."""
-    type: Literal["ma_cross", "composable"] = Field(..., description="Registered strategy type")
-    params: dict[str, Any] = Field(default_factory=dict)
+# --- Meta / health ----------------------------------------------------------
 
-    model_config = ConfigDict(extra="forbid")
-
-
-class UniverseFilter(BaseModel):
-    boards: list[str] | None = None
-    exclude_st: bool = True
-    market_cap_min: float | None = None
-    market_cap_max: float | None = None
-    sectors_l1: list[str] | None = None
-
-    model_config = ConfigDict(extra="forbid")
+class HealthResponse(BaseModel):
+    status: Literal["ok"] = "ok"
+    version: str
+    cached_stocks: int
+    cached_runs: int
 
 
-class BacktestConfigSpec(BaseModel):
-    start: str = "2023-05-18"
-    end: str = "2026-05-18"
-    initial_cash: float = 1_000_000.0
-    limit_hit_fill_prob: float = 0.20
-    random_seed: int = 42
-
-    model_config = ConfigDict(extra="forbid")
-
-
-class BacktestRequest(BaseModel):
-    strategy: StrategySpec
-    universe: list[str] = Field(..., min_length=1, description="Stock codes to trade")
-    universe_filter: UniverseFilter | None = None
-    config: BacktestConfigSpec = Field(default_factory=BacktestConfigSpec)
-
-    model_config = ConfigDict(extra="forbid")
-
-
-class FactorAttribution(BaseModel):
-    alpha_annualized: float
-    loadings: dict[str, float] = Field(default_factory=dict)
-    t_stats: dict[str, float] = Field(default_factory=dict)
-    r_squared: float
-    residual_vol_annualized: float
-    n_obs: int
-
-
-class RegimePerf(BaseModel):
-    n_days: int
-    annualized_return: float
-    sharpe: float
-    max_drawdown: float
-
-
-class BacktestSummary(BaseModel):
-    n_bars: int
-    initial_equity: float
-    final_equity: float
-    total_return: float
-    annualized_return: float
-    annualized_vol: float
-    sharpe: float
-    max_drawdown: float
-    max_drawdown_peak: str | None = None
-    max_drawdown_trough: str | None = None
-    calmar: float
-    win_rate: float
-    avg_hold_days: float
-    n_trips: int
-    n_fills: int
-    n_rejections: int
-    turnover: float
-    factor_attribution: FactorAttribution | None = None
-    regime_metrics: dict[str, RegimePerf] | None = None
-
-
-class BacktestRunResponse(BaseModel):
-    run_id: str
-    status: Literal["completed", "failed"]
-    summary: BacktestSummary | None = None
-    error: str | None = None
-
-
-class EquityPoint(BaseModel):
-    date: str
-    equity: float
-
-
-class FillRecord(BaseModel):
-    date: str
-    code: str
-    side: Literal["buy", "sell"]
-    shares: int
-    price: float
-    cost: float
-    rejected_reason: str | None = None
-
-
-class BacktestResultResponse(BaseModel):
-    run_id: str
-    status: str
-    config: BacktestRequest
-    summary: BacktestSummary | None = None
-    equity_curve: list[EquityPoint]
-    fills: list[FillRecord]
-    rejections: list[FillRecord]
-    error: str | None = None
-
-
-class BacktestRunListItem(BaseModel):
-    run_id: str
-    status: str
-    strategy_type: str
-    universe_size: int
-    start: str
-    end: str
-    created_at: str
-    sharpe: float | None = None
-    total_return: float | None = None
-
+# --- Data: universe + stock OHLCV ------------------------------------------
 
 class StockBar(BaseModel):
     date: str
@@ -144,10 +35,17 @@ class StockOHLCVResponse(BaseModel):
     bars: list[StockBar]
 
 
+class UniverseStock(BaseModel):
+    code: str
+    name: str | None = None
+    board: str | None = None
+    is_st: bool = False
+
+
 class UniverseResponse(BaseModel):
     name: str
     codes: list[str]
-    stocks: list[dict[str, Any]]
+    stocks: list[UniverseStock]
 
 
 class FetchRequest(BaseModel):
@@ -165,65 +63,107 @@ class FetchResponse(BaseModel):
     used_synthetic: bool
 
 
-class HealthResponse(BaseModel):
-    status: Literal["ok"] = "ok"
-    version: str
-    cached_stocks: int
-    cached_runs: int
+# --- Factor research --------------------------------------------------------
+
+class FactorParamSpec(BaseModel):
+    """One tunable knob on a factor."""
+    name: str
+    type: Literal["int", "float", "str", "bool"]
+    default: Any
+    description: str | None = None
+    min: float | None = None
+    max: float | None = None
 
 
-# --- Phase 5: walk-forward ----------------------------------------------------
-
-class WalkForwardConfigSpec(BaseModel):
-    train_months: int = Field(12, ge=1, le=60)
-    test_months: int = Field(3, ge=1, le=36)
-    step_months: int = Field(3, ge=1, le=36)
-    min_train_bars: int = Field(200, ge=20)
-    overfit_gap_threshold: float = Field(0.5, ge=0.0)
-    model_config = ConfigDict(extra="forbid")
+class FactorMeta(BaseModel):
+    name: str
+    category: Literal["flow", "fundamental", "technical", "event", "sector"]
+    description: str
+    lookback_days: int
+    rebalance_freq: Literal["daily", "weekly", "monthly"]
+    params: list[FactorParamSpec] = Field(default_factory=list)
 
 
-class WalkForwardRequest(BaseModel):
-    request: BacktestRequest
-    walk_forward: WalkForwardConfigSpec = Field(default_factory=WalkForwardConfigSpec)
-    model_config = ConfigDict(extra="forbid")
+class ICPoint(BaseModel):
+    date: str
+    ic: float
 
 
-class WindowResultSchema(BaseModel):
-    window_idx: int
-    train_start: str
-    train_end: str
-    test_start: str
-    test_end: str
-    is_summary: dict = Field(default_factory=dict)
-    oos_summary: dict = Field(default_factory=dict)
-    is_oos_sharpe_gap: float = 0.0
-    skipped: bool = False
-    skip_reason: str | None = None
+class QuintileCumPoint(BaseModel):
+    date: str
+    # Cumulative return per quintile, plus the long-short spread (q1-q5).
+    q1: float
+    q2: float
+    q3: float
+    q4: float
+    q5: float
+    long_short: float
 
 
-class WalkForwardRunResponse(BaseModel):
-    run_id: str
-    status: Literal["completed", "failed"]
-    aggregate_is_sharpe: float = 0.0
-    aggregate_oos_sharpe: float = 0.0
-    aggregate_gap: float = 0.0
-    overfit_flag: bool = False
-    n_windows: int = 0
-    error: str | None = None
+class DecayPoint(BaseModel):
+    horizon: int
+    ic_mean: float
+    ic_ir: float
 
 
-class WalkForwardResultResponse(BaseModel):
+class ICSummary(BaseModel):
+    mean: float
+    std: float
+    ir: float
+    hit_rate: float
+    t_stat: float
+    n: int
+
+
+class QuintileSummary(BaseModel):
+    long_short_mean: float
+    long_short_std: float
+    long_short_sharpe: float
+    long_short_total_return: float
+    monotonicity: float = Field(
+        ...,
+        description="Spearman rank correlation between quintile index 1..5 and "
+                    "mean per-period return (positive = monotone deciles).",
+    )
+    avg_turnover: float
+
+
+class FactorEvaluationResponse(BaseModel):
+    factor: FactorMeta
+    params: dict[str, Any]
+    universe: str
+    start: str
+    end: str
+    rebalance: Literal["daily", "weekly", "monthly"]
+    horizon: int
+    n_dates: int
+    n_stocks_avg: float
+
+    ic_series: list[ICPoint]
+    ic_summary: ICSummary
+    quintile_cum: list[QuintileCumPoint]
+    quintile_summary: QuintileSummary
+    decay: list[DecayPoint]
+    cached: bool = Field(False, description="True if this evaluation was returned from cache.")
+
+
+# --- Backtest / walk-forward shells (kept for Sprint 3 re-use) -------------
+
+class EquityPoint(BaseModel):
+    date: str
+    equity: float
+
+
+class BacktestRunListItem(BaseModel):
     run_id: str
     status: str
-    request: WalkForwardRequest
-    aggregate_is_sharpe: float
-    aggregate_oos_sharpe: float
-    aggregate_gap: float
-    overfit_flag: bool
-    windows: list[WindowResultSchema]
-    oos_equity_curve: list[EquityPoint]
-    error: str | None = None
+    strategy_type: str
+    universe_size: int
+    start: str
+    end: str
+    created_at: str
+    sharpe: float | None = None
+    total_return: float | None = None
 
 
 class WalkForwardRunListItem(BaseModel):

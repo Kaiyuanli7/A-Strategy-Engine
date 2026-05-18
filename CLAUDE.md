@@ -4,27 +4,43 @@ This file is loaded automatically at the start of every Claude Code session in t
 repository. Read it fully before doing anything substantive. Update it (and bump the
 version below) when goals or constraints shift.
 
-**Last revised:** 2026-05-18 · **Version:** 1.0
+**Last revised:** 2026-05-18 · **Version:** 2.0
 
 ---
 
 ## 0. Project identity
 
-A-share (Chinese stock market / 沪深A股) trading strategy research platform.
+A-share (沪深A股) **factor research workstation**. Not a generic backtester. Not a
+broker. Not an indicator-rule strategy builder (that was the v1 design — deleted in
+the May 2026 overhaul).
 
-The owner is a **college junior** who is a junior analyst at a university investment
-fund, an incoming summer intern at **CSC Financial (中信建投)**, and an active options
-trader. Treat them as a sophisticated user but assume zero institutional infrastructure
-(no Bloomberg, no proprietary data, no co-located servers).
+The product is a junior version of a WorldQuant / Citadel-style factor research bench:
+
+1. Ingest alternative + fundamental A-share data (northbound flow, margin, 龙虎榜,
+   limit-up pools, fundamentals, sectors).
+2. Construct individual alpha factors with explicit point-in-time discipline.
+3. Evaluate each factor rigorously: IC time series, IC IR, hit rate, quintile
+   spread, decay curve, regime conditioning.
+4. Combine validated factors into composite scores.
+5. Rank the universe, build a top-N portfolio, backtest it with real A-share costs
+   and constraints.
+6. Serve the entire workflow through a React dashboard so the owner can iterate on
+   factor ideas in minutes.
+
+The owner is a **college junior**, junior analyst at a university investment fund,
+incoming summer intern at **CSC Financial (中信建投)**, active options trader.
+Sophisticated user, zero institutional infrastructure (no Bloomberg, no proprietary
+data, no co-located servers).
 
 ---
 
 ## 1. What we are actually trying to achieve (priority-ordered)
 
-1. **Make money trading A-shares.** Medium-frequency (weekly→monthly rebalance) systematic
-   strategies. This is the primary motivation; everything else falls out of getting this right.
-2. **Build credibility for the CSC Financial internship.** A serious, defensible research
-   process visible in this repo.
+1. **Make money trading A-shares.** Build a top-N factor-ranked portfolio (weekly
+   rebalance) with out-of-sample Sharpe in the 0.6-1.2 band, net of all costs.
+2. **Build credibility for the CSC Financial internship.** A serious factor research
+   process — IC analysis, walk-forward weight optimization, factor attribution —
+   visible in this repo.
 3. **Provide a working research tool for the university investment fund.**
 4. **Learn quant finance properly.** Meta-goal that compounds the others.
 
@@ -37,131 +53,155 @@ genuinely helps the owner make money also satisfies #2, #3, and #4 by constructi
 
 This project succeeds when the owner can:
 
-- Run real A-share data through 1+ strategies whose **out-of-sample** Sharpe (net of all
-  costs) is between 0.6 and 1.2 over a 12+ month rolling window — this is the realistic
-  band for genuinely working factor / behavioral strategies in China.
-- Show CSC interviewers a paper-trading track record of 3-6 months with clean factor
-  attribution and regime-by-regime breakdown.
-- Deploy real capital with portfolio-level risk discipline (sector caps, vol targeting,
-  drawdown circuit breakers) and follow the system rather than overriding it.
-- Confidently say what their edge is, why it persists, and what would invalidate it.
+- Show a library of **validated alpha factors**, each documented with: mean IC > 0.03
+  OOS, IC IR > 0.5, positive quintile monotonicity, decay curve, regime breakdown.
+- Run a composite of ≤5 of these factors against the full CSI 300 (then 500 / 1000)
+  and produce a top-N portfolio with OOS Sharpe 0.6-1.2 over a 12+ month walk-forward
+  window.
+- Paper-trade that portfolio for 3-6 months with clean factor attribution and a
+  trade journal.
+- Confidently say what each factor is loading on, why the edge persists, and what
+  would invalidate it.
+- Deploy real capital with portfolio-level risk discipline (sector caps, vol
+  targeting, drawdown circuit breakers) and follow the system rather than overriding it.
 
 A platform demo that just produces pretty charts is **not** success. A clean codebase
-that doesn't include real validation is **not** success.
+that doesn't include real validation is **not** success. A factor with IC > 0.05 only
+in-sample is **not** success.
 
 ---
 
 ## 3. Hard rules — never violate these
 
-These are non-negotiable. If a request seems to ask you to break one of them, push back
+Non-negotiable. If a request seems to ask you to break one of them, push back
 explicitly rather than complying.
+
+### Factor research
+
+1. **NEVER claim a factor "works" without out-of-sample IC analysis.** Show IC
+   series, mean IC, IR, hit rate, and quintile spread before declaring victory.
+2. **NEVER optimize factor weights in-sample only.** Walk-forward is mandatory —
+   default 12-month train, 3-month test, rolling. Show IS vs OOS Sharpe side by side.
+3. **WARN when IS-OOS Sharpe gap exceeds 0.5.** That's the overfit detector. Add it
+   as a hard gate before promoting a composite to paper trading.
+4. **NEVER cap a composite above 5 factors.** Each extra factor steals OOS
+   degrees-of-freedom. If a request needs 8 factors, push back and suggest fewer +
+   walk-forward.
+5. **Suspect any factor with IC > 0.10** on real data. The realistic ceiling for a
+   single factor on A-shares is ~0.06 net of trading costs. > 0.10 means almost
+   certainly look-ahead, survivorship bias, or a data leak. Investigate.
+6. **Look-ahead is the #1 killer.** All `FactorContext` getters return data with
+   timestamps strictly **before** `as_of`. Don't bypass them. Don't read raw bars
+   for `as_of` itself. Don't use fundamentals before their announce_date.
 
 ### Trading & validation
 
-1. **NEVER claim a strategy "works" without out-of-sample validation.** In-sample numbers
-   alone are meaningless. Always run walk-forward and report IS vs OOS side by side.
-2. **NEVER auto-execute live trades.** This platform generates orders for manual review.
-   Live broker integration, when it exists, must be opt-in per-order, never per-session.
-3. **NEVER present synthetic-data backtest numbers as real performance.** The synthetic
-   path exists only for engine correctness testing and offline demos. Backtest
-   conclusions on synthetic data are noise.
-4. **NEVER cap parameter count above 4 per strategy.** Each extra knob steals a degree of
-   freedom from OOS performance. If the user wants 8 parameters, suggest a regression
-   test instead.
-5. **WARN when in-sample → out-of-sample Sharpe drops by more than 0.5.** This is the
-   overfit detector. Add it as a hard gate before promoting any strategy to paper trading.
-6. **REFUSE to remove A-share constraints** (T+1, price limits, lot sizes, stamp tax,
-   commission floor, suspension detection) "just for testing." A backtest without these
-   is garbage and produces misleading numbers.
+7. **NEVER auto-execute live trades.** The platform produces orders for manual
+   review. Live broker integration, when it exists, is opt-in per-order.
+8. **NEVER present synthetic-data evaluation numbers as real performance.** The
+   synthetic path exists only for engine correctness testing and offline demos.
+9. **REFUSE to remove A-share constraints** (T+1, price limits, lot sizes, stamp
+   tax, commission floor, suspension detection) "just for testing." A backtest
+   without these produces fake numbers.
 
-### Realistic Sharpe ranges (use as sanity checks)
+### Realistic IC / Sharpe ranges
 
-| Setup | Realistic Sharpe (net) | Flag if you see |
+| Setup | Realistic (net) | Flag if you see |
 |---|---|---|
-| Single-factor strategy, 300+ stocks, walk-forward | 0.4 – 0.9 | > 1.5 = look for the bug |
-| Multi-factor combo, walk-forward | 0.7 – 1.3 | > 2.0 = almost certainly overfit |
+| Single factor, mean IC | 0.02 – 0.06 | > 0.10 = bug or leak |
+| Single factor, IC IR | 0.3 – 1.0 | > 1.5 = look for the bug |
+| Composite (≤5 factors), OOS Sharpe | 0.6 – 1.2 | > 2.0 = almost certainly overfit |
 | In-sample only (any setup) | meaningless | "alpha" here is regression-to-training |
 | Synthetic data (any setup) | meaningless | the data has no signal |
 
-If a backtest comes back with Sharpe > 2.0 on real data, **the default assumption is
-overfitting or a bug**, not skill. Investigate. Check: lookahead, survivorship bias,
-data leakage, transaction costs missing, position sizes too small to trigger commission floor.
+If a factor evaluation comes back with mean IC > 0.10 on real data, **the default
+assumption is overfitting, look-ahead, or a bug** — not skill. Investigate.
 
 ### Code
 
-7. **Tests are required** for new strategy / indicator / condition code. The pattern is
-   established in `tests/test_*.py`; follow it.
-8. **No silent data conversions.** AKShare returns Chinese column names, fraction vs
-   percent inconsistencies, NaN-vs-empty distinctions. Normalize at the edge
-   (`AKShareClient`), assert in tests, never let it propagate.
-9. **No new dependencies without justification.** Adding `polars`, `vectorbt`, `qlib`, etc.
-   needs an explicit reason. We already chose pandas + a custom engine for A-share
-   constraint correctness — those choices are settled.
+10. **Tests required** for new factor / evaluation / data-ingestion code. The
+    pattern is established under `tests/test_factor_*.py`,
+    `tests/test_evaluation_*.py`, `tests/test_data_*.py`. Mirror them.
+11. **No silent data conversions.** AKShare returns Chinese column names, fraction
+    vs percent inconsistencies, NaN vs empty distinctions. Normalize at the edge
+    (`astrategy/data/akshare_client.py`), assert in tests, never let it propagate.
+12. **No new dependencies without justification.** Adding `polars`, `vectorbt`,
+    `qlib`, etc. needs an explicit reason. We've already chosen pandas + scipy +
+    statsmodels + optuna and the cache-first SQLite pattern.
 
 ---
 
-## 4. What edges to pursue (and what NOT to)
+## 4. Factor edges to pursue (and what NOT to)
 
-### Edges worth pursuing
+The factor library targets these categories. Each phase adds factors to one or more.
 
-Roughly priority-ordered for a college student / small fund:
+### Flow factors (资金流向) — highest priority
 
-- **Value + Momentum combo** — Liu, Stambaugh, Yuan 2019 ("Size and Value in China") is
-  the canonical citation. Strongest documented persistent edge in A-shares.
-- **Northbound flow (北向资金) follow-through** — Stock Connect net inflows precede
-  multi-day price moves on foreign-favored names.
-- **PEAD (post-earnings announcement drift)** — survives in A-shares with more strength
-  than in the US, because retail underreaction.
-- **Limit-up follow-through (涨停板续板)** — stocks closing at limit-up frequently
-  gap-up next day. Highly behavioral, very A-share-specific. Requires same-day-ish
-  signal and disciplined exits.
-- **Policy theme rotation** — 新质生产力, 国产替代, etc. Sector momentum lags policy
-  announcements by days to weeks. Slowest, most thesis-driven of the edges here.
-- **Mean reversion after extreme drawdowns** — national team (国家队) intervention
-  creates structural reversion at index level. Use sparingly; entries are rare.
-- **Options volatility selling** — sell premium when IV rank > 70, buy when < 30.
-  The user already trades options; this is their latent biggest edge and the platform
-  doesn't address it yet (Phase 9).
+- **Northbound Momentum (Factor 1.1)** — trailing northbound net-buy / float cap.
+  *Implemented*. Cumulative Stock Connect inflows lead retail by 2-3 weeks.
+- Northbound Holding Acceleration (1.2) — second derivative of northbound flow.
+- Margin Sentiment Divergence (1.3) — margin balance change vs price action.
+  Retail leverage is the dumb money in A-shares; fading it is profitable.
+- 龙虎榜 Institutional Net Buying (1.4) — net buying by 机构专用 seats minus
+  hot-money 游资 seats.
 
-### Edges to NOT pursue
+### Fundamental factors (基本面)
 
-Don't build, don't suggest, don't waste time on:
+- Earnings Quality (2.1), Revenue Acceleration (2.2), Earnings Surprise / PEAD
+  (2.3), Valuation Composite (2.4).
 
-- **HFT / market making** — millisecond infrastructure, you have none.
-- **Daily round-trip strategies** — T+1 makes them impossible by construction.
-- **News sentiment NLP on Chinese text** — institutions have the same APIs you do,
-  plus human analysts. Negative-EV unless you have proprietary text.
+### Technical / behavioral (技术/行为)
+
+- Short-term reversal with volume divergence (3.1), Momentum skip-5 (3.2),
+  Volatility-adjusted momentum (3.3).
+- Liu, Stambaugh, Yuan 2019 ("Size and Value in China") is the canonical citation.
+
+### Event factors (涨停 / 跌停)
+
+- Limit-up continuation probability (4.1), Post-limit-down recovery (4.2).
+  Highly A-share specific; behavioral; need clean limit_pool data.
+
+### Sector rotation (板块轮动)
+
+- Sector momentum relative (5.1), Sector flow concentration (5.2).
+  Captures policy / theme-driven sector waves.
+
+### Don't waste time on
+
+- **HFT / market making** — millisecond infra needed, retail has none.
+- **Daily round-trip strategies** — T+1 + costs make these unprofitable by
+  construction.
+- **News-sentiment NLP on Chinese text** — institutions have the same APIs,
+  plus human analysts; negative EV unless owner has proprietary text.
+- **Pure black-box ML on price data** — overfits catastrophically at retail
+  scale. ML is fine as a layer on top of a thesis-driven factor, not as the thesis.
 - **Beating CSC's own prop desk** — they ARE the market in mid-cap A-shares.
-- **Pure black-box ML on price data** — overfits catastrophically with retail-scale data.
-  ML is fine for feature engineering or as a layer on top of a thesis-driven strategy.
-- **Insider info, anything that touches MNPI** — illegal, career-ending.
 
 ---
 
-## 5. Engineering invariants (decisions that are settled)
+## 5. Engineering invariants (settled decisions)
 
 Don't relitigate these unless explicitly asked:
 
-- **Python 3.11+**, pandas, numpy, FastAPI for backend. SQLite for persistence (single-file,
-  embeddable, fast enough at our scale).
-- **AKShare** as primary data source; synthetic fallback for sandboxed/offline. Real AKShare
-  endpoints drift — every call has try-three-fallbacks pattern in `astrategy/data/akshare_client.py`.
+- **Python 3.11+**, pandas, numpy, scipy, statsmodels, optuna, FastAPI, SQLite.
+- **AKShare** as primary data source; synthetic fallback for sandboxed/offline.
+  Real AKShare endpoints drift — every call has a try-three-fallbacks pattern in
+  `astrategy/data/akshare_client.py`.
 - **React 18 + TypeScript strict + Tailwind + Recharts + Vite** for frontend.
-- **Event-driven bar-by-bar backtest engine** (not vectorized). Correctness > speed.
-  We can parallelize across CPU cores later; we won't sacrifice T+1 correctness for vectorization.
-- **Strategy ABC pattern**: precompute signals in `initialize()`, look up by date in
-  `on_bar()`. Both `DualMACrossStrategy` and `ComposableStrategy` follow this — new
-  strategies must too.
-- **Next-bar-open fill** is the default. Signal at bar N close → execute at bar N+1 open.
-  Prevents lookahead. Never change this default without an explicit ADR.
-- **252 trading days/year**, **2.0% risk-free rate** for Sharpe — universal convention,
-  comparable across research.
+- **Event-driven bar-by-bar backtest engine** for the eventual portfolio backtests
+  (Sprint 3) — correctness over speed.
+- **Factor pattern**: every factor is a subclass of `Factor` in
+  `astrategy/factors/`, registered via `@register_factor`, computed through
+  `FactorContext` which enforces point-in-time data access.
+- **252 trading days/year**, **2.0% risk-free rate** for any Sharpe math —
+  universal convention.
 
 ---
 
-## 6. A-share constraints — always model these correctly
+## 6. A-share constraints — always modeled correctly
 
-These are the difference between a useful tool and "garbage" (owner's word):
+These are the difference between a useful tool and "garbage" (owner's word). Live
+in `astrategy/engine/constraints.py` + `costs.py`:
 
 | Constraint | Default |
 |---|---|
@@ -177,152 +217,159 @@ These are the difference between a useful tool and "garbage" (owner's word):
 | Transfer fee | 0.001% both sides |
 | Suspension detection | volume == 0 or missing date → reject orders |
 
-A strategy that round-trips daily needs ~0.15% directional edge **just to break even**
-before slippage. Bias toward weekly+ holding periods.
+A factor-driven portfolio that round-trips weekly needs ~0.4% directional edge per
+rebalance to break even on costs. Bias toward holding periods that respect this.
 
 ---
 
 ## 7. Current state (as of 2026-05-18)
 
-Shipped (PR #1 + PR #3 merged; Phase 5 on the active feature branch):
+PR `claude/overhaul-codebase-O7UJJ` ships the factor-research foundation:
 
-- **Phase 1**: data layer + backtest engine with A-share constraints + dual-MA demo
-- **Phase 2**: FastAPI REST server + Pydantic schemas + backtest run persistence
-- **Phase 3**: React/Vite/TS/Tailwind frontend (runs list, results dashboard, screener)
-- **Phase 4**: composable strategies + fundamentals/sector/northbound data + visual builder
-- **Phase 5**: PIT index membership + walk-forward validation + factor attribution +
-  regime tagging + real-AKShare smoke test scaffold
+- **Deleted** the indicator/composable-strategy paradigm (composable.py,
+  conditions.py, indicators.py, ma_cross, DEMO_UNIVERSE, builder frontend).
+- **Kept and reused** the event-driven backtest engine + T+1 / price-limit /
+  cost layer, walk-forward, regime tagging, attribution, AKShare retry/fallback
+  client, SQLite cache, PIT index membership, synthetic generators.
+- **Added** the `astrategy/factors/` package (Factor ABC, registry,
+  FactorContext) and `astrategy/evaluation/` package (IC, quintile, decay,
+  correlation, runner).
+- **Added Factor 1.1 — Northbound Momentum** end-to-end: data → compute → IC /
+  quintile / decay evaluation → cached REST endpoint → React Factor Lab page.
+- **Added alt-data tables**: margin_daily, lhb_disclosure, limit_pool,
+  analyst_estimates (scaffold for Factors 1.3, 1.4, 4.1, 4.2, 2.3).
+- **Added AKShare client methods**: get_northbound_holdings,
+  get_margin_detail, get_lhb_disclosure, get_limit_pool, get_analyst_ratings,
+  each with retry + Chinese-column normalization.
+- **Added loader methods**: prime_northbound_individual, prime_margin,
+  prime_lhb, prime_limit_pools, prime_analyst_estimates.
+- **Rewrote API**: /api/factors, /api/factors/{name}/evaluate.
+- **Rewrote frontend**: single Factor Research Lab view with selector,
+  parameter tuner, IC chart, quintile chart, decay chart, diagnostics panel.
+- **Smoke-script extended** to validate the new endpoints on the owner's Mac.
 
-Test suite: 157 passing. Frontend typechecks + builds clean.
-
-**Critical gap closing in progress:** Phase 5 ships the walk-forward + factor + regime
-machinery, but real-data validation still requires the owner to run
-`scripts/smoke_real_akshare.py` and `scripts/prime_csi300.py` locally on a Mac with
-external network access (this sandbox blocks AKShare's eastmoney/sina with 403).
+**Critical gap closing in progress:** the sandbox running Claude Code can't reach
+eastmoney/sina (403). The owner must run `scripts/smoke_real_akshare.py` and the
+priming scripts on their Mac to validate the real-data path. Everything in this
+sandbox runs against synthetic data, which is for engine testing only — its
+factor evaluations are **noise**, not signal.
 
 ---
 
-## 8. Phase roadmap
+## 8. Sprint roadmap (post-overhaul)
 
-Phases 1-4 done. Next phases, in implementation priority order:
+Sprint 1 ✓ (this PR): Foundation + Factor 1.1 E2E.
 
-### Phase 5 — Real data + universe scale-up + walk-forward (REQUIRED before anything else)
+Next sprints in priority order:
 
-**This is the most important phase. Without it, every metric in this repo is noise.**
+### Sprint 2 — Factors 1.2 through 5.2 (the rest of the library)
 
-- Run the real AKShare fetch path locally on the owner's Mac (sandbox can't). Validate
-  data shape, completeness, holiday handling on real prices.
-- Expand universe from 10 demo stocks → full CSI 300 (then later CSI 500 / 1000).
-- Implement **point-in-time index membership** to eliminate survivorship bias. Without
-  this, every "winner" backtest is partly luck of being in today's index.
-- Implement **walk-forward validation** as a first-class feature of the engine. Default:
-  12-month train, 3-month test, rolling. Every backtest produces IS + OOS metrics
-  side-by-side. Strategies with OOS Sharpe < 0.3 or IS-OOS gap > 0.5 are flagged.
-- Add **factor attribution** to backtest output: decompose returns vs value/momentum/size/
-  vol/beta-300 factors so the user knows what their "alpha" is actually loading on.
-- Add **regime tagging** (bull/bear/range/high-vol) and per-regime metrics.
+- Implement the remaining eleven factors from the catalogue in §4.
+- Each gets: implementation + unit tests + synthetic generator if needed +
+  IC evaluation on the synthetic universe (engine sanity check) + real-data
+  validation on the owner's Mac.
+- Add the factor correlation matrix view to the frontend.
 
-### Phase 6 — Grid search optimizer (with overfit guards)
+### Sprint 3 — Composite + portfolio + walk-forward optimizer
 
-Per the original prompt, but with critical anti-overfit measures from the start:
-- All grid sweeps display IS + OOS side by side. Hide IS-only "best" results.
-- Auto-flag candidates with IS-OOS gap > 0.5.
-- Penalize complexity: more parameters → higher OOS Sharpe threshold to "pass."
-- Heatmap visualization in the React UI.
+- IC-weighted composite (rolling 60-day IC weights).
+- Equal-weight rank composite as baseline.
+- Top-N portfolio strategy (`TopNRankerStrategy`) wired to the existing
+  backtest engine.
+- Walk-forward weight optimization via optuna with overfit guards
+  (regularization toward equal weights, complexity penalty).
+- Backtest results page + walk-forward results page in the frontend.
 
-### Phase 7 — Paper trading + drift monitoring
+### Sprint 4 — Frontend Views 2-5
 
-- "Live mode": same engine fed by daily real-close data. Produces "orders for tomorrow."
-  User executes manually in their broker until trust is established.
-- Drift detector: realized live Sharpe vs backtested expectation. If gap > 1.0 for 3+
-  months, pause the strategy.
-- Trade journal: every order tagged with reason + signal value + expected exit. Mandatory
-  weekly post-trade review.
+- Factor Correlation Dashboard
+- Portfolio Backtest Results (re-add)
+- Live Screener (top-N + per-factor sub-scores)
+- Factor Discovery Sandbox (custom factor formula DSL)
 
-### Phase 8 — Portfolio risk management
+### Sprint 5 — Real-data validation + universe scale-up
 
-- Portfolio-level vol targeting (default 12% annualized).
-- Sector caps (max 25% any single SW L1).
-- Single-name caps (max 8%).
-- Drawdown circuit breakers: pause new entries at -10% MTM, pause everything at -15%.
-- Optional beta hedge via 沪深300 ETF or index futures.
+- Owner runs `prime_csi300.py` (real mode) + `prime_csi500.py` + `prime_csi1000.py`
+  on Mac.
+- Real AKShare smoke results trigger fallback-chain updates if endpoints drift.
+- Re-evaluate every factor on the real universe; document IC / IR / hit rate
+  per factor in `docs/STRATEGY.md`.
 
-### Phase 9 — Options (the latent edge)
+### Sprint 6+ — Paper trading + drift monitoring (was old Phase 7)
 
-The owner trades options actively but the platform has zero options support. This is the
-single biggest unleveraged edge in the project.
-
-- 50ETF期权 / 300ETF期权 / on liquid individual names.
-- IV surface ingestion + IV rank / IV percentile signals.
-- Strategy templates: covered calls (income on long-stock sleeve), cash-secured puts
-  (deploy cash with discount entry), defined-risk verticals.
-- Pin risk + early-assignment handling for American-style.
-
-### Phase 10 — Live broker execution
-
-Only after 6+ months of clean paper trading. Likely via 同花顺 / 通达信 / brokerage API.
-Even then, semi-automatic: platform generates orders, user reviews, user submits.
-
-### Phase 11+ — Genetic / Bayesian / strategy discovery
-
-Per original prompt. Defer until Phases 5-10 ship — these techniques are dangerous
-without strong overfit guards.
+### Sprint 7+ — Portfolio risk layer + options (was old Phase 8-9)
 
 ---
 
 ## 9. Decision framework — when working, ask:
 
-Before adding a feature, ask **all four**:
+Before adding a feature, ask **all five**:
 
 1. **Does this move the owner toward making money?** (vs. demo polish)
 2. **Would CSC's quant team consider this rigorous?** (vs. retail-tier shortcuts)
 3. **Does this respect the hard rules in §3?** (no overfit-enabling features)
-4. **Is this in scope for the current phase?** (no Phase 9 work while Phase 5 is unmerged)
+4. **Does the underlying factor have a documented OOS edge?** (mean IC > 0.03,
+   quintile monotonicity positive)
+5. **Is this in scope for the current sprint?** (no Sprint 4 work while Sprint 2
+   factors are unbuilt)
 
 If three or more are "no," push back instead of complying.
 
 When choosing between two implementations, prefer:
-- **Correctness over speed.** We optimize once it works.
+- **Correctness over speed.** Vectorization comes after a passing test.
 - **Explicit over clever.** Junior quant readers must understand the code.
-- **Settled patterns over new abstractions.** Mimic existing strategy/condition/test patterns.
-- **Conservative over aggressive defaults.** Higher commissions, lower fill probabilities,
-  wider stops in defaults — the user can loosen them deliberately.
+- **Settled patterns over new abstractions.** Mimic existing factor / evaluation
+  patterns.
+- **Conservative over aggressive defaults.** Higher commissions, lower fill
+  probabilities, wider stops — the user can loosen them deliberately.
 
 ---
 
 ## 10. Anti-patterns — push back when you see these
 
-If the owner (or any contributor) asks for something matching these, **flag it** before doing:
+If the owner (or any contributor) asks for something matching these, **flag it**
+before doing:
 
-- "Let me run this backtest with 8 parameters tuned" → too many DOF; suggest 3 + walk-forward
-- "Strategy X has Sharpe 3.5 in backtest" → suspicious; check for lookahead, surv bias,
-  cost model, in-sample only
-- "Let's skip walk-forward for this one" → no; that's exactly when it's needed
-- "Ship without tests" → no; the strategy / indicator test pattern is established
-- "Let's mock the network out and use synthetic for the real backtest" → no; synthetic
-  is for engine testing, not strategy validation
-- "Add a daily round-trip strategy" → T+1 + costs make this almost always unprofitable
-- "Build a sentiment NLP module" → very low EV; only if owner has proprietary text
-- "Let's just deploy this with real money" → only after 6+ months paper trading
+- "Factor X has IC 0.12" → suspicious; check look-ahead, surv bias, cost-side
+  of forward return calculation.
+- "Composite with 10 factors" → no; cap at 5; complexity penalty kicks in.
+- "Factor weights tuned in-sample" → no; walk-forward only.
+- "Let's skip IC analysis for this one" → no; that's the validation step.
+- "Let's skip the quintile chart, just look at IC" → no; monotonicity is a
+  separate sanity check.
+- "Ship without tests" → no; the test patterns are established.
+- "Let's deploy this composite live with real money" → only after 6+ months
+  paper trading with clean attribution.
+- "Add a daily round-trip strategy" → T+1 + costs make this almost always
+  unprofitable.
+- "Build a sentiment NLP module" → very low EV unless owner has proprietary text.
+- "Let's just mock the data for the real factor evaluation" → no; synthetic is
+  for engine testing, not factor validation.
 
 ---
 
 ## 11. CSC internship lens
 
-When making feature decisions, periodically ask: **would this impress a CSC senior quant?**
+When making feature decisions, periodically ask: **would this impress a CSC senior
+quant?**
 
-Things they WILL care about (build these):
-- Clean walk-forward methodology with honest IS vs OOS reporting
-- Factor attribution per backtest
-- A-share market structure knowledge (T+1, limit moves, 印花税, 国家队, 北向 flow)
-- Paper trading track record with attribution
-- Smart questions about THEIR research (this is meta — the platform should leave room for it)
+Things they WILL care about:
 
-Things they will NOT care about (don't over-invest):
-- React component architecture
-- Line of code count, test count
-- Strategy variety (depth > breadth — one strategy understood cold > ten half-baked)
-- Pretty charts beyond what's needed for analysis
+- Honest IS vs OOS reporting on every composite.
+- Per-factor IC / IR / hit rate / decay tables.
+- Factor correlation matrix (do your factors actually carry independent signal?).
+- Walk-forward methodology, regime-conditional performance.
+- A-share market structure knowledge (T+1, limit moves, 印花税, 国家队, 北向 flow).
+- Paper trading track record with factor attribution.
+- Smart questions about THEIR research (the platform should leave room for it).
+
+Things they will NOT care about:
+
+- React component architecture.
+- Line of code count, test count.
+- Number of factors implemented (depth > breadth — five well-evaluated factors >
+  twelve half-evaluated ones).
+- Pretty charts beyond what's needed for analysis.
 
 ---
 
@@ -332,35 +379,40 @@ In priority order, weeks 1-12:
 
 | Weeks | Work |
 |---|---|
-| 1 | Verify real AKShare path locally on the owner's Mac. Cache 5 years of CSI 300 daily OHLCV. |
-| 2-3 | Expand engine support to 300+ stocks. Implement point-in-time index membership. |
-| 3-4 | Implement walk-forward validation as a first-class engine feature. |
-| 5-6 | Pick ONE strategy that survives walk-forward (probably value + momentum). Develop fully. |
-| 7-12 | Paper trade that ONE strategy with real daily data. Log every signal + execution. |
+| 1 | Owner runs the new prime scripts on real CSI 300 data. Validate Factor 1.1 IC on real northbound flow. |
+| 2-3 | Implement Factors 1.2 (NB acceleration), 2.1 (earnings quality), 3.2 (momentum skip-5), 2.4 (valuation composite). Each fully evaluated. |
+| 4-5 | Factor correlation matrix view. Pick a low-correlation composite of 3-5 factors. Walk-forward weight optimization. |
+| 6-7 | Wire the top-N portfolio strategy. Backtest the composite on CSI 300 with full A-share constraints. Show OOS Sharpe + factor attribution. |
+| 8-12 | Paper trade the composite with real daily data. Log every signal + execution. Weekly review. Aim for 3 months of clean attribution by July (CSC start). |
 
-**The intern goal**: by July 2026 when the CSC internship starts, have ONE production-quality
-strategy with a 2-3 month real paper-trading record + clean factor attribution.
-That's worth more than ten half-tested strategies.
+**The intern goal**: by July 2026 when the CSC internship starts, walk in with one
+composite of ≤5 factors, 2-3 months of paper-trading record on real daily data,
+factor attribution per month, and a regime-conditional breakdown. That's worth more
+than ten half-tested factors.
 
 ---
 
 ## 13. Pointers
 
-- `docs/STRATEGY.md` — longer strategic review, A-share edge catalogue, academic references
-- `README.md` — macOS quickstart, REST API examples
-- `tests/` — established test patterns (mirror these for new code)
-- `astrategy/strategies/composable.py` — the canonical "complex strategy" pattern; new
-  strategy types should follow this structure
-- PR #1 (https://github.com/Kaiyuanli7/A-Strategy-Engine/pull/1) — Phases 2-4
+- `docs/STRATEGY.md` — longer strategic review, A-share edge catalogue, academic
+  references. May need updates to reflect the factor-research pivot.
+- `README.md` — macOS quickstart, REST API examples.
+- `tests/test_factor_base.py`, `test_factor_northbound.py` — Factor pattern
+  reference implementations.
+- `tests/test_evaluation_*.py` — IC / quintile / decay reference tests.
+- `astrategy/factors/northbound.py` — the canonical "factor with parameters"
+  example; new factors mirror this structure.
+- `astrategy/evaluation/runner.py` — `evaluate_factor()` is the end-to-end
+  orchestration. Look here before adding evaluation logic anywhere else.
 
 ---
 
 ## 14. House-keeping
 
-- Branch: `claude/ashare-trading-strategy-RegyP`
-- PR: #1, against `main`
-- The owner has approved the branch + PR setup; new commits land on this branch
+- Active branch: `claude/overhaul-codebase-O7UJJ`
+- The owner approved the overhaul + branch on 2026-05-18
 - Never push to `main` directly
-- Don't commit `data/*.db` (gitignored), `frontend/node_modules`, or `*.tsbuildinfo`
+- Don't commit `data/*.db` (gitignored), `data/evaluations/*` (gitignore
+  recommended), `frontend/node_modules`, `*.tsbuildinfo`
 - Commit messages: brief subject, blank line, bullet-point body covering what + why
 - Always close commit messages with the session URL

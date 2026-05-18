@@ -371,6 +371,92 @@ def generate_synthetic_index_history(
     return pd.DataFrame(rows, columns=["member_code", "effective_date", "expiry_date"])
 
 
+def generate_synthetic_margin(code: str, start: str, end: str) -> pd.DataFrame:
+    """Per-day 融资融券 with realistic-ish ranges; deterministic by code."""
+    rng = np.random.default_rng(_seed_from_code(code, salt=5))
+    dates = _trading_days(start, end)
+    n = len(dates)
+    if n == 0:
+        return pd.DataFrame(columns=[
+            "date", "financing_balance", "short_balance",
+            "financing_buy_amount", "financing_repay_amount", "net_financing_change",
+        ])
+    anchor = _anchor_for(code)
+    base = anchor["mkt_cap"] * 0.04  # ~4% of cap typical financing balance
+    walk = base + np.cumsum(rng.normal(0, base * 0.01, n))
+    walk = np.clip(walk, base * 0.5, base * 2.0)
+    short_bal = walk * 0.02
+    buy = np.abs(rng.normal(walk * 0.05, walk * 0.02, n))
+    repay = np.abs(rng.normal(walk * 0.05, walk * 0.02, n))
+    return pd.DataFrame({
+        "date": dates.strftime("%Y-%m-%d"),
+        "financing_balance": np.round(walk, 0),
+        "short_balance": np.round(short_bal, 0),
+        "financing_buy_amount": np.round(buy, 0),
+        "financing_repay_amount": np.round(repay, 0),
+        "net_financing_change": np.round(buy - repay, 0),
+    })
+
+
+def generate_synthetic_lhb(
+    code: str, start: str, end: str, n_events: int = 8,
+) -> list[dict]:
+    """A handful of 龙虎榜 disclosures spread across the period."""
+    rng = np.random.default_rng(_seed_from_code(code, salt=6))
+    dates = _trading_days(start, end)
+    if len(dates) == 0:
+        return []
+    event_count = min(n_events, max(1, len(dates) // 60))
+    event_dates = sorted(rng.choice(dates, size=event_count, replace=False))
+    seat_pool = [
+        ("机构专用", "institutional"),
+        ("机构专用", "institutional"),
+        ("申万宏源证券有限公司上海闵行区东川路证券营业部", "hot_money"),
+        ("华泰证券股份有限公司深圳益田路证券营业部", "hot_money"),
+        ("中信证券股份有限公司北京金融大街证券营业部", "hot_money"),
+    ]
+    rows: list[dict] = []
+    for d in event_dates:
+        date_str = pd.Timestamp(d).strftime("%Y-%m-%d")
+        for seq in range(5):
+            name, kind = seat_pool[seq % len(seat_pool)]
+            buy = float(rng.uniform(2e6, 8e7))
+            sell = float(rng.uniform(2e6, 8e7))
+            rows.append({
+                "code": code, "date": date_str, "seq": seq,
+                "seat_name": name, "seat_type": kind,
+                "buy_amount": buy, "sell_amount": sell, "net_amount": buy - sell,
+            })
+    return rows
+
+
+def generate_synthetic_limit_pool(
+    start: str, end: str, n_codes: int = 20, n_events_per_code: int = 3,
+) -> list[dict]:
+    """A small population of 涨停 / 跌停 events for testing factor 4.x."""
+    codes = synthetic_universe_codes(n=n_codes, prefix="L")
+    rng = np.random.default_rng(_seed_from_code("LIMIT_POOL", salt=7))
+    dates = _trading_days(start, end)
+    if len(dates) == 0:
+        return []
+    rows: list[dict] = []
+    for code in codes:
+        events = sorted(rng.choice(dates, size=min(n_events_per_code, len(dates)), replace=False))
+        consec = 1
+        for ev in events:
+            direction = "up" if rng.random() > 0.4 else "down"
+            rows.append({
+                "code": code,
+                "date": pd.Timestamp(ev).strftime("%Y-%m-%d"),
+                "direction": direction,
+                "consecutive_days": int(consec),
+                "is_first": int(consec == 1),
+                "turnover_pct": float(rng.uniform(3.0, 15.0)),
+            })
+            consec = consec + 1 if rng.random() > 0.7 else 1
+    return rows
+
+
 def generate_synthetic_market_index(
     code: str = "000300",
     start: str = "2021-01-01",

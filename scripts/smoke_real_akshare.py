@@ -165,6 +165,49 @@ def northbound_flow(client) -> dict:
         return {"ok": False, "summary": f"akshare error: {e}"}
 
 
+def northbound_per_stock(client) -> dict:
+    """Verify AKShareClient.get_northbound_holdings() returns usable rows."""
+    end = datetime.now().strftime("%Y-%m-%d")
+    start = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+    df = client.get_northbound_holdings(SAMPLE_STOCKS[0], start, end)
+    return {
+        "ok": not df.empty,
+        "summary": f"{len(df)} northbound rows for {SAMPLE_STOCKS[0]}",
+    }
+
+
+def margin_per_stock(client) -> dict:
+    """Verify get_margin_detail() returns usable rows."""
+    end = datetime.now().strftime("%Y-%m-%d")
+    start = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    df = client.get_margin_detail(SAMPLE_STOCKS[0], start, end)
+    return {
+        "ok": not df.empty,
+        "summary": f"{len(df)} margin rows for {SAMPLE_STOCKS[0]}",
+    }
+
+
+def lhb_disclosure(client) -> dict:
+    """Verify get_lhb_disclosure() returns rows for a recent business day."""
+    # Walk back up to 14 days looking for a date with data
+    for offset in range(1, 15):
+        d = (datetime.now() - timedelta(days=offset)).strftime("%Y-%m-%d")
+        df = client.get_lhb_disclosure(d)
+        if not df.empty:
+            return {"ok": True, "summary": f"{len(df)} rows on {d}"}
+    return {"ok": False, "summary": "no recent date returned 龙虎榜 data"}
+
+
+def limit_pool(client) -> dict:
+    """Verify get_limit_pool() returns rows for a recent date."""
+    for offset in range(1, 15):
+        d = (datetime.now() - timedelta(days=offset)).strftime("%Y-%m-%d")
+        df = client.get_limit_pool(d, direction="up")
+        if not df.empty:
+            return {"ok": True, "summary": f"{len(df)} 涨停 rows on {d}"}
+    return {"ok": False, "summary": "no recent date returned limit-up data"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--report-path", default=None, help="optional: write results JSON to file")
@@ -183,6 +226,11 @@ def main() -> int:
         check("financial_indicators", lambda: financial_indicators(client)),
         check("sector_classification", lambda: sector_classification(client)),
         check("northbound_flow", lambda: northbound_flow(client)),
+        # Factor-research alt-data
+        check("northbound_per_stock", lambda: northbound_per_stock(client)),
+        check("margin_per_stock", lambda: margin_per_stock(client)),
+        check("lhb_disclosure", lambda: lhb_disclosure(client)),
+        check("limit_pool", lambda: limit_pool(client)),
     ]
 
     print("\n=== Summary ===")

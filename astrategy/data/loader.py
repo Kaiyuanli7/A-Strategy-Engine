@@ -187,6 +187,111 @@ class DataLoader:
 
         return counts
 
+    # ----- Factor-research alt-data prime methods --------------------------
+
+    def prime_northbound_individual(
+        self,
+        codes: list[str],
+        start: str,
+        end: str,
+        force_refresh: bool = False,
+    ) -> dict[str, int]:
+        """Fetch per-stock northbound holdings from AKShare and cache them."""
+        results: dict[str, int] = {}
+        for code in tqdm(codes, desc="Northbound", unit="stock"):
+            if not force_refresh:
+                existing = self.cache.get_northbound(code, start, end)
+                if not existing.empty and len(existing) >= 30:
+                    results[code] = len(existing)
+                    continue
+            try:
+                df = self.client.get_northbound_holdings(code, start, end)
+            except Exception as e:
+                log.warning("northbound fetch failed for %s: %s", code, e)
+                results[code] = 0
+                continue
+            results[code] = self.cache.upsert_northbound(code, df)
+        return results
+
+    def prime_margin(
+        self,
+        codes: list[str],
+        start: str,
+        end: str,
+        force_refresh: bool = False,
+    ) -> dict[str, int]:
+        """Fetch per-stock margin (融资融券) data."""
+        results: dict[str, int] = {}
+        for code in tqdm(codes, desc="Margin", unit="stock"):
+            if not force_refresh:
+                existing = self.cache.get_margin_daily(code, start, end)
+                if not existing.empty and len(existing) >= 30:
+                    results[code] = len(existing)
+                    continue
+            try:
+                df = self.client.get_margin_detail(code, start, end)
+            except Exception as e:
+                log.warning("margin fetch failed for %s: %s", code, e)
+                results[code] = 0
+                continue
+            results[code] = self.cache.upsert_margin_daily(code, df)
+        return results
+
+    def prime_lhb(self, start: str, end: str) -> int:
+        """
+        Fetch all 龙虎榜 disclosures in [start, end]. AKShare's lhb endpoints
+        are date-range driven (not per-stock), so this returns total rows.
+        """
+        from datetime import date as date_type, datetime as dt
+        start_d = dt.strptime(start, "%Y-%m-%d").date()
+        end_d = dt.strptime(end, "%Y-%m-%d").date()
+        total = 0
+        current = start_d
+        while current <= end_d:
+            try:
+                df = self.client.get_lhb_disclosure(current.strftime("%Y-%m-%d"))
+            except Exception as e:
+                log.warning("lhb fetch failed for %s: %s", current, e)
+                df = None
+            if df is not None and not df.empty:
+                rows = df.to_dict("records")
+                total += self.cache.upsert_lhb_rows(rows)
+            current = date_type.fromordinal(current.toordinal() + 1)
+        return total
+
+    def prime_limit_pools(self, start: str, end: str) -> int:
+        """Fetch limit-up + limit-down pools day by day."""
+        from datetime import date as date_type, datetime as dt
+        start_d = dt.strptime(start, "%Y-%m-%d").date()
+        end_d = dt.strptime(end, "%Y-%m-%d").date()
+        total = 0
+        current = start_d
+        while current <= end_d:
+            for direction in ("up", "down"):
+                try:
+                    df = self.client.get_limit_pool(current.strftime("%Y-%m-%d"), direction)
+                except Exception as e:
+                    log.warning("limit %s fetch failed for %s: %s", direction, current, e)
+                    df = None
+                if df is not None and not df.empty:
+                    rows = df.to_dict("records")
+                    total += self.cache.upsert_limit_pool_rows(rows)
+            current = date_type.fromordinal(current.toordinal() + 1)
+        return total
+
+    def prime_analyst_estimates(self, codes: list[str]) -> dict[str, int]:
+        """Fetch analyst rating snapshots (best-effort scaffold for Factor 2.3)."""
+        results: dict[str, int] = {}
+        for code in tqdm(codes, desc="Analyst", unit="stock"):
+            try:
+                df = self.client.get_analyst_ratings(code)
+            except Exception as e:
+                log.warning("analyst ratings fetch failed for %s: %s", code, e)
+                results[code] = 0
+                continue
+            results[code] = self.cache.upsert_analyst_estimates(code, source="em", df=df)
+        return results
+
     def prime_extras_synthetic(
         self,
         codes: list[str],
@@ -201,6 +306,8 @@ class DataLoader:
         """
         from astrategy.data.synthetic import (
             generate_synthetic_fundamentals,
+            generate_synthetic_lhb,
+            generate_synthetic_margin,
             generate_synthetic_northbound,
             generate_synthetic_sector,
             generate_synthetic_valuation_daily,
@@ -225,10 +332,16 @@ class DataLoader:
                 sw_l1_name=sec["sw_l1_name"],
                 sw_l1_code=sec.get("sw_l1_code"),
             )
+            margin_df = generate_synthetic_margin(code, start, end)
+            self.cache.upsert_margin_daily(code, margin_df)
+            lhb_rows = generate_synthetic_lhb(code, start, end)
+            self.cache.upsert_lhb_rows(lhb_rows)
             results[code] = {
                 "fundamentals": len(f),
                 "valuation_daily": len(v),
                 "northbound_daily": len(n),
+                "margin_daily": len(margin_df),
+                "lhb": len(lhb_rows),
                 "sector": 1,
             }
         return results
