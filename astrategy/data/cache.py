@@ -214,14 +214,28 @@ class SQLiteCache:
                     return None
                 return float(v)
 
+            def required(col: str) -> float:
+                v = r.get(col)
+                if v is None or pd.isna(v):
+                    raise ValueError(f"upsert_daily_bars: required column '{col}' is missing for {code}")
+                return float(v)
+
+            # Volume is treated as soft-required: if the upstream feed (e.g.
+            # tencent's stock_zh_a_hist_tx) doesn't provide it, default to 0
+            # so the row still lands. Suspension detection treats volume == 0
+            # as suspended; the caller in get_daily_ohlcv tries to derive
+            # volume ≈ amount/close before reaching us.
+            volume = r.get("volume")
+            volume_f = 0.0 if (volume is None or pd.isna(volume)) else float(volume)
+
             rows.append((
                 code,
                 str(r["date"]),
-                float(r["open"]),
-                float(r["high"]),
-                float(r["low"]),
-                float(r["close"]),
-                float(r["volume"]),
+                required("open"),
+                required("high"),
+                required("low"),
+                required("close"),
+                volume_f,
                 opt("amount"),
                 opt("pct_change"),
                 opt("turnover"),

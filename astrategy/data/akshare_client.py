@@ -456,9 +456,26 @@ class AKShareClient:
             try:
                 self._sleep()
                 df = self._call_with_retry(call)
+                # Sina returns date as the index; reset it before renaming.
+                if "date" not in df.columns and df.index.name in ("date", None):
+                    df = df.reset_index().rename(columns={df.index.name or "index": "date"})
                 df = df.rename(columns=_OHLCV_RENAME)
-                # sina/tencent endpoints return 'date' as Timestamp in some versions
                 df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+
+                # Different endpoints return different columns:
+                #   eastmoney: open, high, low, close, volume, amount, pct_change, turnover
+                #   tencent:   open, high, low, close, amount        (NO volume)
+                #   sina:      open, high, low, close, volume, amount, turnover
+                # When volume is missing but amount + close are present, derive
+                # volume ≈ amount / close. Rough (real VWAP ≠ close) but good
+                # enough to keep downstream suspension detection from firing
+                # on every cell.
+                if "volume" not in df.columns and "amount" in df.columns and "close" in df.columns:
+                    df["volume"] = (df["amount"].astype(float)
+                                    / df["close"].astype(float).where(df["close"] > 0, other=pd.NA))
+                if "amount" not in df.columns and "volume" in df.columns and "close" in df.columns:
+                    df["amount"] = df["volume"].astype(float) * df["close"].astype(float)
+
                 keep = ["date", "open", "high", "low", "close", "volume",
                         "amount", "pct_change", "turnover"]
                 df = df[[c for c in keep if c in df.columns]].copy()
