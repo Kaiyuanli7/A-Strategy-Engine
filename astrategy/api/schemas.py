@@ -225,6 +225,25 @@ class FillRecord(BaseModel):
     rejected_reason: str | None = None
 
 
+class HoldingResponse(BaseModel):
+    code: str
+    shares: int
+    avg_cost: float
+    market_value: float
+    pnl: float
+    pnl_pct: float
+    last_price: float
+    entry_date: str
+    sector: str | None = None
+
+
+class SectorWeightResponse(BaseModel):
+    sector: str
+    weight: float
+    n_stocks: int
+    market_value: float
+
+
 # --- Backtest / walk-forward shells (kept for Sprint 3 re-use) -------------
 
 class EquityPoint(BaseModel):
@@ -240,6 +259,8 @@ class PortfolioResultResponse(BaseModel):
     equity_curve: list[EquityPoint]
     fills: list[FillRecord]
     rejections: list[FillRecord]
+    final_holdings: list[HoldingResponse] = Field(default_factory=list)
+    sector_exposure: list[SectorWeightResponse] = Field(default_factory=list)
     error: str | None = None
 
 

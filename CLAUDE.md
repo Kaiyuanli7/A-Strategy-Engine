@@ -291,8 +291,27 @@ signed-IC-weighted composite handles this automatically: the factor's
 trailing negative IC produces a negative weight, turning it into a short
 signal in the composite without code changes.
 
-Test count: **222 passing** (up from 150 after Sprint 1, 183 after
-Sprint 2).
+**Sprint 3.5 (also on PR #5)** — walk-forward weight optimizer:
+
+- `FixedWeightComposite` — applies caller-supplied weights; consumer of
+  any pre-fitted weight set.
+- `fit_composite_weights_optuna` — Optuna search with L2 regularization
+  toward equal weights and per-factor cap (CLAUDE.md §3 rule 4). Works
+  on pre-computed factor scores + forward returns so each trial is just
+  numpy aggregation.
+- `scripts/optimize_weights.py` CLI — single-window fit OR walk-forward
+  mode that flags `⚠ OVERFIT` when |IS-OOS gap| > 0.5. Reproducible by
+  seed.
+
+**Sprint 4 partial (also on PR #5)** — Factor Correlation Dashboard:
+
+- `GET /api/factors/correlation` endpoint — pairwise Spearman rank
+  correlation across N factors, averaged over rebalance dates.
+- `/correlation` frontend page — color-graded heatmap with blue gradient
+  for positive correlation, red for negative, intensity = |ρ|. Lets the
+  owner prune redundant factors (|ρ| > 0.7 = redundant).
+
+Test count: **240+ passing**.
 
 **Critical gap closing in progress:** the sandbox running Claude Code can't
 reach eastmoney/sina (403). The owner must run `scripts/smoke_real_akshare.py`
@@ -342,7 +361,112 @@ Next sprints in priority order:
 
 ### Sprint 6+ — Paper trading + drift monitoring (was old Phase 7)
 
+The bridge from research bench to live trading. See §15 below for the
+end-to-end deployment path. Key components: daily prime cron, daily
+signal generator (at 14:50, 5 min before close), paper portfolio
+persistence, order journal, pre-market briefing UI, performance
+dashboard.
+
 ### Sprint 7+ — Portfolio risk layer + options (was old Phase 8-9)
+
+Vol targeting, drawdown circuit breakers, sector caps tightening, then
+options support (50ETF / 300ETF / individual-name; IV rank; defined-risk
+templates).
+
+---
+
+## 15. Real-trading deployment path
+
+Going from this research workstation to actually placing orders in a CN
+brokerage account is intentionally slow and gated. Each stage requires
+the prior stage to clear a quality bar.
+
+### Stage 1 — Factor validation on real data (in progress, owner)
+- Re-prime real CSI 300 (real OHLCV + northbound + fundamentals).
+- Run `evaluate_factor.py` on each of the 5 factors over 2022-2025.
+- Build correlation matrix at `/correlation` → pick 3-4 low-correlation
+  factors.
+- `optimize_weights.py --walk-forward` → confirm avg OOS Sharpe > 0.5
+  with IS-OOS gap < 0.5.
+- Document IS vs OOS per window in `docs/STRATEGY.md`.
+- **Quality bar to clear Stage 1**: composite OOS Sharpe ≥ 0.5,
+  gap ≤ 0.5, quintile monotonicity positive, drawdown ≤ 25% in backtest.
+
+### Stage 2 — Paper trading mode (Sprint 6, future PR)
+**Goal**: 3-6 months of generating orders and (manually) executing them,
+with clean attribution.
+
+Components to build:
+- **Daily prime cron / LaunchAgent on Mac**: refresh OHLCV + alt-data
+  every trading day after 16:00.
+- **Daily signal generator**: scheduled at ~14:50 (5 minutes before close).
+  Computes composite + diff vs current paper portfolio → "today's trade
+  list" (stocks to BUY / SELL with target share counts).
+- **Paper portfolio persistence**: SQLite `paper_portfolio` table
+  (code, shares, sellable, avg_cost, entry_date). Marked-to-market daily.
+- **Order journal**: `paper_orders` table — every signal with decision
+  time, planned price, actual fill (owner enters manually), realized vs
+  planned slippage.
+- **Pre-market briefing UI**: `/paper/today` page showing today's planned
+  trades with reasoning — composite score, top factor contributions,
+  sector before/after, market cap.
+- **Performance dashboard**: paper-trading equity curve vs backtest
+  expectation; alert if rolling 30-day Sharpe deviates > 1σ.
+
+Quality bar to clear Stage 2: 3 months clean paper-trading with realized
+Sharpe within 0.5σ of backtest expectation, no operational errors.
+
+### Stage 3 — Broker integration (Sprint 7)
+The hard truth for CN retail systematic traders: **most domestic brokers
+don't expose public APIs**. Options:
+
+- **Option A — Semi-automatic via manual submission (RECOMMENDED for owner)**:
+  Platform generates CSV/printable order list. Owner manually enters into
+  broker app (同花顺 / 通达信 / 华泰 / 中信建投). Post-trade reconciliation:
+  owner reports filled prices back to the platform. 5-10 min per rebalance
+  day, effectively zero systems risk.
+- **Option B — `easytrader` library / 通达信 plugin (semi-supported)**:
+  Open-source screen-scraping driver for several CN broker desktop clients.
+  Unsupported by brokers; brittle; carries TOS risk. Useful only after
+  Stage 2 trust is built.
+- **Option C — Move to HK / US equivalents**: Futu / Tiger / Longbridge
+  have proper APIs. Trade CSI 300-mirroring ETFs (2823.HK, ASHR, FXI).
+  Loses pure A-share factor exposure but enables programmatic trading.
+- **Option D — Wait for QFII-tier access**: Institutional only. CSC
+  internship may expose pathways long-term.
+
+**Default**: Option A for the next 12-18 months. Revisit when the strategy
+has cleared Stage 2.
+
+Pre-trade checks at the platform level (regardless of execution path):
+- Refuse trades that violate sector / single-name / ST / market-cap rules.
+- Refuse trades during lunch break (11:30-13:00).
+- Warn on suspended stocks.
+- Limit-up/limit-down probability fail-fast.
+
+### Stage 4 — Drift detection (Sprint 7)
+- Live rolling Sharpe vs backtest expectation; alert > 1σ deviation.
+- Per-factor IC monitoring: recompute IC monthly; flag any factor whose
+  IC has fallen below half its historical mean for 2+ months.
+- Regime detector: use existing `engine/regime.py` classifier to flag
+  hostile regimes.
+- Pause new trades automatically if drift sustained 2+ weeks; require
+  manual acknowledgment to resume.
+
+### Stage 5 — Risk discipline (Sprint 7)
+- Vol targeting: scale position sizes to target 12% annualized vol.
+- Sector + single-name caps already in `TopNRankerStrategy`.
+- Drawdown circuit breaker: if portfolio DD > 15%, halve all positions
+  until DD recovers to 10%.
+- Concentration metrics: Herfindahl > 0.3 → alert.
+
+### Stage 6 — Live deployment (after 3-6 months clean Stage 2)
+- Start small: **¥100,000 - ¥500,000** (CLAUDE.md §3 sweet spot).
+  Below ¥100k, commission floor dominates; above ¥10M, small-cap
+  liquidity walls (not relevant for CSI 300 but a constraint for
+  future small-cap variants).
+- Weekly reconciliation. Monthly review with factor attribution.
+  Quarterly OOS revalidation. Annual STRATEGY.md refresh.
 
 ---
 

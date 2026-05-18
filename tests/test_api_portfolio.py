@@ -100,6 +100,21 @@ def test_portfolio_result_retrievable(client):
     assert len(body2["equity_curve"]) > 50
     # Some fills were generated (10-stock rebalance over 12 months)
     assert isinstance(body2["fills"], list)
+    # New fields: holdings + sector exposure
+    assert isinstance(body2["final_holdings"], list)
+    assert isinstance(body2["sector_exposure"], list)
+    if body2["final_holdings"]:
+        h = body2["final_holdings"][0]
+        for key in ("code", "shares", "avg_cost", "market_value",
+                    "pnl", "pnl_pct", "last_price", "entry_date"):
+            assert key in h
+    if body2["sector_exposure"]:
+        s = body2["sector_exposure"][0]
+        for key in ("sector", "weight", "n_stocks", "market_value"):
+            assert key in s
+        # Weights sum to ≈ 1
+        total = sum(x["weight"] for x in body2["sector_exposure"])
+        assert abs(total - 1.0) < 0.01
 
 
 def test_portfolio_run_404_for_unknown_id(client):

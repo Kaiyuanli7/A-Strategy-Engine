@@ -31,9 +31,11 @@ from astrategy.api.schemas import (
     FetchResponse,
     FillRecord,
     HealthResponse,
+    HoldingResponse,
     PortfolioBacktestRequest,
     PortfolioBacktestResponse,
     PortfolioResultResponse,
+    SectorWeightResponse,
     StockBar,
     StockOHLCVResponse,
     UniverseResponse,
@@ -60,6 +62,10 @@ from astrategy.evaluation.runner import (
     EvaluationConfig,
 )
 from astrategy.factors import get_factor, list_factors
+from astrategy.strategies.holdings import (
+    derive_final_holdings,
+    derive_sector_exposure,
+)
 from astrategy.strategies.top_n_ranker import TopNRankerStrategy
 
 log = logging.getLogger(__name__)
@@ -488,17 +494,19 @@ def run_portfolio_backtest(
 def get_portfolio_run(
     run_id: str,
     storage: Annotated[RunStorage, Depends(get_storage)],
+    cache: Annotated[SQLiteCache, Depends(get_cache)],
 ) -> PortfolioResultResponse:
     row = storage.get_run(run_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"run {run_id} not found")
 
     config = PortfolioBacktestRequest.model_validate(row["config"])
+    fills_dicts = [f for f in row["fills"] if not f.get("rejected")]
     fills = [
         FillRecord(date=f["date"], code=f["code"], side=f["side"],
                    shares=int(f["shares"]), price=float(f["price"]),
                    cost=float(f["cost"]))
-        for f in row["fills"] if not f.get("rejected")
+        for f in fills_dicts
     ]
     rejections = [
         FillRecord(date=f["date"], code=f["code"], side=f["side"],
@@ -508,10 +516,42 @@ def get_portfolio_run(
     ]
     equity = [EquityPoint(date=p["date"], equity=float(p["equity"]))
               for p in row["equity_curve"]]
+
+    # Derive end-state holdings + sector exposure from the fills timeline.
+    held_codes = sorted({f["code"] for f in fills_dicts})
+    bars_by_code = {}
+    for code in held_codes:
+        df = cache.get_daily_bars(code, config.start, config.end)
+        if not df.empty:
+            bars_by_code[code] = df.set_index("date").sort_index()
+    sector_map_raw = cache.get_sectors(held_codes) if held_codes else {}
+    sector_map = {c: m.get("sw_l1_name") for c, m in sector_map_raw.items()}
+
+    raw_holdings = derive_final_holdings(
+        fills_dicts, bars_by_code=bars_by_code, sector_map=sector_map,
+    )
+    holdings = [
+        HoldingResponse(
+            code=h.code, shares=h.shares, avg_cost=h.avg_cost,
+            market_value=h.market_value, pnl=h.pnl, pnl_pct=h.pnl_pct,
+            last_price=h.last_price, entry_date=h.entry_date, sector=h.sector,
+        )
+        for h in raw_holdings
+    ]
+    raw_sectors = derive_sector_exposure(raw_holdings)
+    sector_exposure = [
+        SectorWeightResponse(
+            sector=s.sector, weight=s.weight,
+            n_stocks=s.n_stocks, market_value=s.market_value,
+        )
+        for s in raw_sectors
+    ]
+
     return PortfolioResultResponse(
         run_id=row["id"], status=row["status"],
         config=config, summary=row["summary"],
         equity_curve=equity, fills=fills, rejections=rejections,
+        final_holdings=holdings, sector_exposure=sector_exposure,
         error=row["error"],
     )
 
