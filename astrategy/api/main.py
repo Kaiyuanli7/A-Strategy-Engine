@@ -196,17 +196,30 @@ def evaluate_factor_endpoint(
     universe: str = Query("000300", description="Index code or 'all_cached'"),
     horizon: int = Query(20, ge=1, le=120),
     rebalance: str = Query("weekly", pattern="^(daily|weekly|monthly)$"),
-    lookback: int | None = Query(None, description="Override factor's default lookback"),
+    # Factor-specific tunables (None means use the factor's default)
+    lookback: int | None = Query(None, description="Factor 1.1, 3.2: trailing window."),
+    window: int | None = Query(None, description="Factor 1.2: per-side flow window."),
+    gap: int | None = Query(None, description="Factor 1.2: gap between flow windows."),
+    skip: int | None = Query(None, description="Factor 3.2: days to skip at the end."),
+    min_ocf_ratio: float | None = Query(None, description="Factor 2.1: OCF/NI gate."),
+    history_days: int | None = Query(None, description="Factor 2.4: percentile lookback."),
     use_cache: bool = Query(True),
 ) -> FactorEvaluationResponse:
     factor_cls = get_factor(name)
     if factor_cls is None:
         raise HTTPException(status_code=404, detail=f"unknown factor '{name}'")
 
-    params: dict = {}
-    if lookback is not None:
-        params["lookback"] = lookback
-    factor = factor_cls(**params)
+    # Forward only the params the factor declares; ignore extras.
+    valid = {p.name for p in factor_cls.param_specs()}
+    incoming = {
+        "lookback": lookback, "window": window, "gap": gap, "skip": skip,
+        "min_ocf_ratio": min_ocf_ratio, "history_days": history_days,
+    }
+    params = {k: v for k, v in incoming.items() if v is not None and k in valid}
+    try:
+        factor = factor_cls(**params)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     config = EvaluationConfig(
         start=start,
