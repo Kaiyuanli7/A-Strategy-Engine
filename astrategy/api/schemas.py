@@ -147,11 +147,90 @@ class FactorEvaluationResponse(BaseModel):
     cached: bool = Field(False, description="True if this evaluation was returned from cache.")
 
 
+# --- Portfolio (Sprint 3): composite + top-N portfolio backtest ------------
+
+class FactorWeightSpec(BaseModel):
+    """One slot in a composite: factor name + factor params + weight."""
+    factor_name: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    weight: float | None = Field(
+        None,
+        description="Explicit weight; None means 'auto' (composite picks).",
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CompositeSpec(BaseModel):
+    """Composite scoring config."""
+    method: Literal["equal_weight", "signed_ic_weighted"] = "equal_weight"
+    factors: list[FactorWeightSpec] = Field(..., min_length=1, max_length=5)
+    rolling_window: int = Field(60, ge=10, le=252,
+                                description="signed_ic_weighted only: trailing IC window")
+    min_ic_abs: float = Field(0.005, ge=0.0, le=0.5,
+                              description="signed_ic_weighted only: drop factors below |IC|")
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PortfolioConfigSpec(BaseModel):
+    top_n: int = Field(30, ge=1, le=300)
+    rebalance_freq: Literal["weekly", "monthly"] = "weekly"
+    max_sector_pct: float = Field(0.25, gt=0.0, le=1.0)
+    max_single_position_pct: float = Field(0.05, gt=0.0, le=1.0)
+    min_market_cap: float = Field(3.0e9, ge=0.0)
+    exclude_st: bool = True
+    weighting: Literal["equal"] = "equal"
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PortfolioBacktestRequest(BaseModel):
+    composite: CompositeSpec
+    portfolio: PortfolioConfigSpec = Field(default_factory=PortfolioConfigSpec)
+    universe: str = "000300"
+    start: str = "2023-01-01"
+    end: str = "2025-12-31"
+    initial_cash: float = 1_000_000.0
+    limit_hit_fill_prob: float = 0.20
+    random_seed: int = 42
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PortfolioBacktestResponse(BaseModel):
+    run_id: str
+    status: Literal["completed", "failed"]
+    summary: dict[str, Any] | None = None
+    error: str | None = None
+
+
+class FillRecord(BaseModel):
+    date: str
+    code: str
+    side: Literal["buy", "sell"]
+    shares: int
+    price: float
+    cost: float
+    rejected_reason: str | None = None
+
+
 # --- Backtest / walk-forward shells (kept for Sprint 3 re-use) -------------
 
 class EquityPoint(BaseModel):
     date: str
     equity: float
+
+
+class PortfolioResultResponse(BaseModel):
+    run_id: str
+    status: str
+    config: PortfolioBacktestRequest
+    summary: dict[str, Any] | None = None
+    equity_curve: list[EquityPoint]
+    fills: list[FillRecord]
+    rejections: list[FillRecord]
+    error: str | None = None
 
 
 class BacktestRunListItem(BaseModel):

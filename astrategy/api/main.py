@@ -23,11 +23,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from astrategy import __version__
 from astrategy.api.schemas import (
     BacktestRunListItem,
+    EquityPoint,
     FactorEvaluationResponse,
     FactorMeta,
     FetchRequest,
     FetchResponse,
+    FillRecord,
     HealthResponse,
+    PortfolioBacktestRequest,
+    PortfolioBacktestResponse,
+    PortfolioResultResponse,
     StockBar,
     StockOHLCVResponse,
     UniverseResponse,
@@ -35,12 +40,19 @@ from astrategy.api.schemas import (
     WalkForwardRunListItem,
 )
 from astrategy.api.storage import RunStorage
+from astrategy.composites import (
+    EqualWeightComposite,
+    FactorWeight,
+    SignedICWeightedComposite,
+)
 from astrategy.config import classify_board, is_st_name
 from astrategy.data.cache import SQLiteCache
 from astrategy.data.loader import DataLoader
-from astrategy.data.universes import KNOWN_INDICES
+from astrategy.data.universes import KNOWN_INDICES, load_universe
+from astrategy.engine.backtest import Backtester, BacktestConfig, enrich_summary
 from astrategy.evaluation.runner import evaluate_factor, EvaluationConfig
 from astrategy.factors import get_factor, list_factors
+from astrategy.strategies.top_n_ranker import TopNRankerStrategy
 
 log = logging.getLogger(__name__)
 
@@ -286,6 +298,185 @@ def list_walk_forward_runs(
     limit: int = Query(50, ge=1, le=500),
 ) -> list[WalkForwardRunListItem]:
     return [WalkForwardRunListItem(**r) for r in storage.list_walk_forward_runs(limit=limit)]
+
+
+# --- Portfolio (Sprint 3) -------------------------------------------------
+
+@app.post(
+    "/api/portfolios/backtest",
+    response_model=PortfolioBacktestResponse,
+    tags=["portfolios"],
+)
+def run_portfolio_backtest(
+    req: PortfolioBacktestRequest,
+    cache: Annotated[SQLiteCache, Depends(get_cache)],
+    storage: Annotated[RunStorage, Depends(get_storage)],
+    loader: Annotated[DataLoader, Depends(get_loader)],
+) -> PortfolioBacktestResponse:
+    """Build composite + TopNRankerStrategy, run Backtester, persist result."""
+    config_dict = req.model_dump()
+    run_id = storage.new_run(config_dict)
+
+    # 1. Resolve universe (PIT-aware).
+    try:
+        if req.universe.isdigit() and len(req.universe) == 6:
+            universe = load_universe(req.universe, as_of=req.end, cache=cache)
+            if not universe:
+                universe = cache.all_meta_codes()
+        else:
+            universe = cache.all_meta_codes()
+    except Exception as e:
+        storage.mark_failed(run_id, f"universe resolution failed: {e}")
+        raise HTTPException(status_code=400, detail=f"universe resolution failed: {e}")
+    if not universe:
+        storage.mark_failed(run_id, "empty universe")
+        raise HTTPException(status_code=404, detail="empty universe; prime the cache first")
+
+    # 2. Build factor instances from the composite spec.
+    try:
+        factor_weights = _build_factor_weights(req.composite.factors)
+    except (ValueError, TypeError) as e:
+        storage.mark_failed(run_id, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # 3. Build composite.
+    composite = _build_composite(req.composite, factor_weights)
+
+    # 4. Build the TopNRankerStrategy.
+    strategy = TopNRankerStrategy(
+        composite=composite,
+        top_n=req.portfolio.top_n,
+        rebalance_freq=req.portfolio.rebalance_freq,
+        max_sector_pct=req.portfolio.max_sector_pct,
+        max_single_position_pct=req.portfolio.max_single_position_pct,
+        min_market_cap=req.portfolio.min_market_cap,
+        exclude_st=req.portfolio.exclude_st,
+        weighting=req.portfolio.weighting,
+        cache=cache,
+    )
+
+    # 5. Load cached bars for the universe.
+    data = loader.load_bars(universe, req.start, req.end)
+    if not data:
+        storage.mark_failed(run_id, "no cached bars for universe")
+        raise HTTPException(
+            status_code=404,
+            detail=f"no cached bars for universe={req.universe} in {req.start}..{req.end}",
+        )
+    meta = loader.load_meta(universe)
+
+    bt_config = BacktestConfig(
+        start=req.start, end=req.end,
+        initial_cash=req.initial_cash,
+        limit_hit_fill_prob=req.limit_hit_fill_prob,
+        random_seed=req.random_seed,
+    )
+
+    try:
+        bt = Backtester(bt_config, strategy, data, meta)
+        result = bt.run()
+    except Exception as e:
+        storage.mark_failed(run_id, repr(e))
+        raise HTTPException(status_code=500, detail=f"backtest failed: {e}")
+
+    # 6. Enrich with attribution + regime (best-effort; needs market index cached).
+    try:
+        enrich_summary(result, cache, universe, req.start, req.end)
+    except Exception as e:
+        log.warning("portfolio summary enrichment skipped: %s", e)
+
+    storage.save_result(run_id, result)
+    return PortfolioBacktestResponse(
+        run_id=run_id, status="completed",
+        summary=_json_safe_summary(result.summary),
+    )
+
+
+@app.get(
+    "/api/portfolios/runs/{run_id}",
+    response_model=PortfolioResultResponse,
+    tags=["portfolios"],
+)
+def get_portfolio_run(
+    run_id: str,
+    storage: Annotated[RunStorage, Depends(get_storage)],
+) -> PortfolioResultResponse:
+    row = storage.get_run(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"run {run_id} not found")
+
+    config = PortfolioBacktestRequest.model_validate(row["config"])
+    fills = [
+        FillRecord(date=f["date"], code=f["code"], side=f["side"],
+                   shares=int(f["shares"]), price=float(f["price"]),
+                   cost=float(f["cost"]))
+        for f in row["fills"] if not f.get("rejected")
+    ]
+    rejections = [
+        FillRecord(date=f["date"], code=f["code"], side=f["side"],
+                   shares=int(f["shares"]), price=float(f["price"]),
+                   cost=float(f["cost"]), rejected_reason=f["rejected"])
+        for f in row["fills"] if f.get("rejected")
+    ]
+    equity = [EquityPoint(date=p["date"], equity=float(p["equity"]))
+              for p in row["equity_curve"]]
+    return PortfolioResultResponse(
+        run_id=row["id"], status=row["status"],
+        config=config, summary=row["summary"],
+        equity_curve=equity, fills=fills, rejections=rejections,
+        error=row["error"],
+    )
+
+
+@app.get(
+    "/api/portfolios/runs",
+    response_model=list[BacktestRunListItem],
+    tags=["portfolios"],
+)
+def list_portfolio_runs(
+    storage: Annotated[RunStorage, Depends(get_storage)],
+    limit: int = Query(50, ge=1, le=500),
+) -> list[BacktestRunListItem]:
+    return [BacktestRunListItem(**r) for r in storage.list_runs(limit=limit)]
+
+
+def _build_factor_weights(specs: list) -> list[FactorWeight]:
+    out: list[FactorWeight] = []
+    for spec in specs:
+        factor_cls = get_factor(spec.factor_name)
+        if factor_cls is None:
+            raise ValueError(f"unknown factor '{spec.factor_name}'")
+        # Filter params against the factor's declared param_specs
+        valid_names = {p.name for p in factor_cls.param_specs()}
+        params = {k: v for k, v in (spec.params or {}).items() if k in valid_names}
+        out.append(FactorWeight(factor=factor_cls(**params), weight=spec.weight))
+    return out
+
+
+def _build_composite(composite_spec, factor_weights):
+    if composite_spec.method == "equal_weight":
+        return EqualWeightComposite(factor_weights)
+    if composite_spec.method == "signed_ic_weighted":
+        return SignedICWeightedComposite(
+            factor_weights,
+            rolling_window=composite_spec.rolling_window,
+            min_ic_abs=composite_spec.min_ic_abs,
+        )
+    raise ValueError(f"unknown composite method '{composite_spec.method}'")
+
+
+def _json_safe_summary(d: dict | None) -> dict | None:
+    if d is None:
+        return None
+    out: dict = {}
+    for k, v in d.items():
+        if hasattr(v, "isoformat"):
+            out[k] = v.isoformat()
+        elif hasattr(v, "item"):
+            out[k] = v.item()
+        else:
+            out[k] = v
+    return out
 
 
 # --- helpers ---------------------------------------------------------------
