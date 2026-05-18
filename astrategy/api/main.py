@@ -17,8 +17,11 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
+import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+
+from astrategy.factors.base import FactorContext
 
 from astrategy import __version__
 from astrategy.api.schemas import (
@@ -35,6 +38,8 @@ from astrategy.api.schemas import (
     PortfolioBacktestRequest,
     PortfolioBacktestResponse,
     PortfolioResultResponse,
+    ScreenerEntry,
+    ScreenerResponse,
     SectorWeightResponse,
     StockBar,
     StockOHLCVResponse,
@@ -436,6 +441,175 @@ def factor_correlation(
         factors=names, matrix=matrix_values,
         universe=universe, start=start, end=end,
         rebalance=rebalance, n_dates=n_dates,
+    )
+
+
+# --- Live Screener (Sprint 4) ---------------------------------------------
+
+@app.get(
+    "/api/screener",
+    response_model=ScreenerResponse,
+    tags=["screener"],
+)
+def live_screener(
+    cache: Annotated[SQLiteCache, Depends(get_cache)],
+    factors: str = Query(..., description="Comma-separated factor names (1-5)"),
+    composite_method: str = Query(
+        "equal_weight",
+        pattern="^(equal_weight|signed_ic_weighted|fixed_weight)$",
+    ),
+    weights: str | None = Query(
+        None,
+        description="For fixed_weight: comma-separated weights matching factors order",
+    ),
+    universe: str = Query("000300"),
+    as_of: str | None = Query(None, description="YYYY-MM-DD; default = today"),
+    top_n: int = Query(30, ge=1, le=300),
+    min_market_cap: float = Query(0.0, ge=0.0),
+    exclude_st: bool = Query(True),
+) -> ScreenerResponse:
+    """
+    Today's top-N composite ranking with per-factor sub-scores.
+
+    Unlike /api/portfolios/backtest, this is a single-date snapshot — no
+    historical replay. Use this as the "what would I buy now?" view; for
+    quality validation, run a backtest first.
+    """
+    factor_names = [n.strip() for n in factors.split(",") if n.strip()]
+    if not 1 <= len(factor_names) <= 5:
+        raise HTTPException(
+            status_code=400, detail="1-5 factors required (5-factor anti-overfit cap)"
+        )
+
+    # Build factor instances at defaults
+    constructed_factors = []
+    for name in factor_names:
+        factor_cls = get_factor(name)
+        if factor_cls is None:
+            raise HTTPException(status_code=400, detail=f"unknown factor '{name}'")
+        constructed_factors.append(factor_cls())
+
+    # Build FactorWeight list
+    if composite_method == "fixed_weight":
+        if not weights:
+            raise HTTPException(
+                status_code=400,
+                detail="fixed_weight requires `weights` query param",
+            )
+        try:
+            weight_vals = [float(w) for w in weights.split(",")]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="weights must be comma-separated floats")
+        if len(weight_vals) != len(constructed_factors):
+            raise HTTPException(
+                status_code=400,
+                detail=f"weights count ({len(weight_vals)}) must match factors count ({len(constructed_factors)})",
+            )
+        factor_weights = [FactorWeight(factor=f, weight=w)
+                          for f, w in zip(constructed_factors, weight_vals)]
+    else:
+        factor_weights = [FactorWeight(factor=f) for f in constructed_factors]
+
+    # Build composite
+    if composite_method == "equal_weight":
+        composite = EqualWeightComposite(factor_weights)
+    elif composite_method == "signed_ic_weighted":
+        composite = SignedICWeightedComposite(factor_weights)
+    else:
+        composite = FixedWeightComposite(factor_weights)
+
+    # Resolve as_of date — default to most recent trading day in the cache
+    if as_of is None:
+        # Use the latest date with any cached bars
+        with cache._conn() as conn:
+            row = conn.execute("SELECT MAX(date) FROM daily_bars").fetchone()
+            as_of = row[0] if row and row[0] else None
+        if not as_of:
+            raise HTTPException(status_code=404, detail="no cached bars; prime first")
+
+    # Resolve universe
+    if universe.isdigit() and len(universe) == 6:
+        universe_codes = load_universe(universe, as_of=as_of, cache=cache)
+        if not universe_codes:
+            universe_codes = cache.all_meta_codes()
+    else:
+        universe_codes = cache.all_meta_codes()
+    if not universe_codes:
+        raise HTTPException(status_code=404, detail="empty universe")
+
+    # Apply ST + min_market_cap filters
+    filtered = []
+    for code in universe_codes:
+        meta = cache.get_stock_meta(code) or {}
+        if exclude_st and bool(meta.get("is_st")):
+            continue
+        if min_market_cap > 0:
+            val = cache.valuation_as_of(code, as_of) or {}
+            mc = val.get("mkt_cap")
+            if mc is None or float(mc) < min_market_cap:
+                continue
+        filtered.append(code)
+
+    # Compute per-factor scores at as_of date
+    ctx = FactorContext(
+        cache=cache, universe=filtered, as_of=pd.Timestamp(as_of),
+    )
+    per_factor_scores: dict[str, pd.Series] = {}
+    for f in constructed_factors:
+        try:
+            per_factor_scores[f.name] = f.compute(ctx)
+        except Exception as e:
+            log.warning("screener: factor %s failed: %s", f.name, e)
+            per_factor_scores[f.name] = pd.Series(dtype="float64")
+
+    # Composite score
+    try:
+        composite_scores = composite.compute(ctx)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"composite failed: {e}")
+    if composite_scores.empty:
+        raise HTTPException(
+            status_code=404,
+            detail="no composite scores computed for any code (likely missing factor data)",
+        )
+
+    composite_scores = composite_scores.sort_values(ascending=False)
+    total_ranked = len(composite_scores)
+
+    # Build entries
+    top_codes = composite_scores.head(top_n).index.tolist()
+    last_prices = {}
+    for code in top_codes:
+        df = cache.get_daily_bars(code, as_of, as_of)
+        if not df.empty:
+            last_prices[code] = float(df.iloc[-1]["close"])
+    sector_map = cache.get_sectors(top_codes)
+
+    entries: list[ScreenerEntry] = []
+    for rank, code in enumerate(top_codes, start=1):
+        meta = cache.get_stock_meta(code) or {}
+        val = cache.valuation_as_of(code, as_of) or {}
+        sub_scores = {}
+        for name, scores in per_factor_scores.items():
+            v = scores.get(code) if code in scores.index else None
+            if v is not None and not pd.isna(v):
+                sub_scores[name] = float(v)
+        entries.append(ScreenerEntry(
+            rank=rank,
+            code=code,
+            name=meta.get("name"),
+            sector=sector_map.get(code, {}).get("sw_l1_name"),
+            last_price=last_prices.get(code),
+            market_cap=float(val["mkt_cap"]) if val.get("mkt_cap") else None,
+            is_st=bool(meta.get("is_st")),
+            composite_score=float(composite_scores[code]),
+            factor_scores=sub_scores,
+        ))
+
+    return ScreenerResponse(
+        as_of=as_of, universe=universe, composite_method=composite_method,
+        factors=factor_names, top_n=top_n, total_ranked=total_ranked,
+        entries=entries,
     )
 
 

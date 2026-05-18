@@ -4,6 +4,7 @@ import FactorCorrelation from '@/pages/FactorCorrelation'
 import FactorLab from '@/pages/FactorLab'
 import PortfolioBacktest from '@/pages/PortfolioBacktest'
 import PortfolioRuns from '@/pages/PortfolioRuns'
+import Screener from '@/pages/Screener'
 import WalkForward from '@/pages/WalkForward'
 
 export default function App() {
@@ -14,6 +15,7 @@ export default function App() {
         <Route path="factors" element={<FactorLab />} />
         <Route path="factors/:name" element={<FactorLab />} />
         <Route path="correlation" element={<FactorCorrelation />} />
+        <Route path="screener" element={<Screener />} />
         <Route path="portfolio" element={<PortfolioBacktest />} />
         <Route path="portfolio/runs" element={<PortfolioRuns />} />
         <Route path="portfolio/runs/:runId" element={<PortfolioBacktest />} />

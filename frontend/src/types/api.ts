@@ -239,6 +239,31 @@ export interface PortfolioRunListItem {
 }
 
 
+// --- Live Screener (Sprint 4) ----------------------------------------------
+
+export interface ScreenerEntry {
+  rank: number
+  code: string
+  name: string | null
+  sector: string | null
+  last_price: number | null
+  market_cap: number | null
+  is_st: boolean
+  composite_score: number
+  factor_scores: Record<string, number>
+}
+
+export interface ScreenerResponse {
+  as_of: string
+  universe: string
+  composite_method: 'equal_weight' | 'signed_ic_weighted' | 'fixed_weight'
+  factors: string[]
+  top_n: number
+  total_ranked: number
+  entries: ScreenerEntry[]
+}
+
+
 // --- Walk-forward weight optimization (Sprint 3.5) -------------------------
 
 export interface WalkForwardRunListItem {

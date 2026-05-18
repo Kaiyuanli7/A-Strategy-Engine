@@ -8,6 +8,7 @@ import type {
   PortfolioBacktestResponse,
   PortfolioResult,
   PortfolioRunListItem,
+  ScreenerResponse,
   StockOHLCV,
   Universe,
   WalkForwardResult,
@@ -87,4 +88,25 @@ export const api = {
     req<WalkForwardRunListItem[]>('/api/walk_forward/runs'),
   walkForwardResult: (runId: string) =>
     req<WalkForwardResult>(`/api/walk_forward/runs/${runId}`),
+  screener: (opts: {
+    factors: string[]
+    composite_method?: 'equal_weight' | 'signed_ic_weighted' | 'fixed_weight'
+    weights?: number[]
+    universe?: string
+    as_of?: string
+    top_n?: number
+    min_market_cap?: number
+    exclude_st?: boolean
+  }) => {
+    const qs = new URLSearchParams({ factors: opts.factors.join(',') })
+    if (opts.composite_method) qs.set('composite_method', opts.composite_method)
+    if (opts.weights && opts.composite_method === 'fixed_weight')
+      qs.set('weights', opts.weights.join(','))
+    if (opts.universe) qs.set('universe', opts.universe)
+    if (opts.as_of) qs.set('as_of', opts.as_of)
+    if (opts.top_n) qs.set('top_n', String(opts.top_n))
+    if (opts.min_market_cap !== undefined) qs.set('min_market_cap', String(opts.min_market_cap))
+    if (opts.exclude_st !== undefined) qs.set('exclude_st', String(opts.exclude_st))
+    return req<ScreenerResponse>(`/api/screener?${qs.toString()}`)
+  },
 }

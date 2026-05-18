@@ -128,6 +128,29 @@ class QuintileSummary(BaseModel):
     avg_turnover: float
 
 
+class ScreenerEntry(BaseModel):
+    """One row in the live screener: composite + per-factor scores."""
+    rank: int
+    code: str
+    name: str | None = None
+    sector: str | None = None
+    last_price: float | None = None
+    market_cap: float | None = None
+    is_st: bool = False
+    composite_score: float
+    factor_scores: dict[str, float]
+
+
+class ScreenerResponse(BaseModel):
+    as_of: str
+    universe: str
+    composite_method: str
+    factors: list[str]
+    top_n: int
+    total_ranked: int
+    entries: list[ScreenerEntry]
+
+
 class FactorCorrelationResponse(BaseModel):
     factors: list[str]
     matrix: list[list[float]]

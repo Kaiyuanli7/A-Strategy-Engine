@@ -34,6 +34,14 @@ export default function Layout() {
               Correlation
             </NavLink>
             <NavLink
+              to="/screener"
+              className={({ isActive }) =>
+                'nav-link' + (isActive ? ' nav-link-active' : '')
+              }
+            >
+              Screener
+            </NavLink>
+            <NavLink
               to="/portfolio"
               className={({ isActive }) =>
                 'nav-link' + (isActive ? ' nav-link-active' : '')
