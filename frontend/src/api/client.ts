@@ -1,5 +1,6 @@
 import type {
   EvaluateParams,
+  FactorCorrelation,
   FactorEvaluation,
   FactorMeta,
   Health,
@@ -58,6 +59,19 @@ export const api = {
     if (params.lookback !== undefined) qs.set('lookback', String(params.lookback))
     if (params.use_cache !== undefined) qs.set('use_cache', String(params.use_cache))
     return req<FactorEvaluation>(`/api/factors/${name}/evaluate?${qs.toString()}`)
+  },
+  factorCorrelation: (
+    factors: string[],
+    start: string,
+    end: string,
+    universe: string,
+    rebalance: 'daily' | 'weekly' | 'monthly' = 'monthly',
+  ) => {
+    const qs = new URLSearchParams({
+      factors: factors.join(','),
+      start, end, universe, rebalance,
+    })
+    return req<FactorCorrelation>(`/api/factors/correlation?${qs.toString()}`)
   },
   runPortfolioBacktest: (body: PortfolioBacktestRequest) =>
     req<PortfolioBacktestResponse>('/api/portfolios/backtest', {

@@ -128,6 +128,16 @@ class QuintileSummary(BaseModel):
     avg_turnover: float
 
 
+class FactorCorrelationResponse(BaseModel):
+    factors: list[str]
+    matrix: list[list[float]]
+    universe: str
+    start: str
+    end: str
+    rebalance: Literal["daily", "weekly", "monthly"]
+    n_dates: int
+
+
 class FactorEvaluationResponse(BaseModel):
     factor: FactorMeta
     params: dict[str, Any]

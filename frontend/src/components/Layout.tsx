@@ -26,6 +26,14 @@ export default function Layout() {
               Factor Lab
             </NavLink>
             <NavLink
+              to="/correlation"
+              className={({ isActive }) =>
+                'nav-link' + (isActive ? ' nav-link-active' : '')
+              }
+            >
+              Correlation
+            </NavLink>
+            <NavLink
               to="/portfolio"
               className={({ isActive }) =>
                 'nav-link' + (isActive ? ' nav-link-active' : '')

@@ -96,6 +96,17 @@ export interface QuintileSummary {
   avg_turnover: number
 }
 
+export interface FactorCorrelation {
+  factors: string[]
+  matrix: number[][]
+  universe: string
+  start: string
+  end: string
+  rebalance: 'daily' | 'weekly' | 'monthly'
+  n_dates: number
+}
+
+
 export interface FactorEvaluation {
   factor: FactorMeta
   params: Record<string, unknown>

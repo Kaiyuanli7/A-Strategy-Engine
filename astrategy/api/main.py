@@ -24,6 +24,7 @@ from astrategy import __version__
 from astrategy.api.schemas import (
     BacktestRunListItem,
     EquityPoint,
+    FactorCorrelationResponse,
     FactorEvaluationResponse,
     FactorMeta,
     FetchRequest,
@@ -51,7 +52,13 @@ from astrategy.data.cache import SQLiteCache
 from astrategy.data.loader import DataLoader
 from astrategy.data.universes import KNOWN_INDICES, load_universe
 from astrategy.engine.backtest import Backtester, BacktestConfig, enrich_summary
-from astrategy.evaluation.runner import evaluate_factor, EvaluationConfig
+from astrategy.evaluation.correlation import pairwise_factor_correlation
+from astrategy.evaluation.runner import (
+    _rebalance_dates,
+    _resolve_universe,
+    evaluate_factor,
+    EvaluationConfig,
+)
 from astrategy.factors import get_factor, list_factors
 from astrategy.strategies.top_n_ranker import TopNRankerStrategy
 
@@ -299,6 +306,86 @@ def list_walk_forward_runs(
     limit: int = Query(50, ge=1, le=500),
 ) -> list[WalkForwardRunListItem]:
     return [WalkForwardRunListItem(**r) for r in storage.list_walk_forward_runs(limit=limit)]
+
+
+@app.get(
+    "/api/factors/correlation",
+    response_model=FactorCorrelationResponse,
+    tags=["factors"],
+)
+def factor_correlation(
+    cache: Annotated[SQLiteCache, Depends(get_cache)],
+    factors: str = Query(..., description="Comma-separated factor names (2-10)."),
+    start: str = Query("2023-01-01"),
+    end: str = Query("2024-12-31"),
+    universe: str = Query("000300"),
+    rebalance: str = Query("monthly", pattern="^(daily|weekly|monthly)$"),
+) -> FactorCorrelationResponse:
+    """
+    Pairwise Spearman rank correlation between factor scores, averaged across
+    rebalance dates.
+
+    Use this to prune redundant factors before building a composite. Two
+    factors with correlation > 0.7 are mostly carrying the same information;
+    pick the one with stronger IC. Per CLAUDE.md §9 — combining low-correlation
+    factors is the sane way to get composite IC > best individual IC.
+    """
+    names = [n.strip() for n in factors.split(",") if n.strip()]
+    if len(names) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="need at least 2 factors for correlation",
+        )
+    if len(names) > 10:
+        raise HTTPException(
+            status_code=400,
+            detail="max 10 factors per correlation request",
+        )
+
+    # Construct each factor at defaults; ignore param tuning here.
+    constructed: list = []
+    for name in names:
+        factor_cls = get_factor(name)
+        if factor_cls is None:
+            raise HTTPException(status_code=400, detail=f"unknown factor '{name}'")
+        constructed.append(factor_cls())
+
+    # Compute scores at each rebalance date for each factor.
+    reb_dates = _rebalance_dates(start, end, rebalance)
+    scores_by_factor: dict[str, dict] = {f.name: {} for f in constructed}
+    for d in reb_dates:
+        universe_codes = _resolve_universe(cache, universe, d.strftime("%Y-%m-%d"))
+        if not universe_codes:
+            continue
+        ctx_obj = type("ctx", (), {})()
+        from astrategy.factors.base import FactorContext
+        ctx_obj = FactorContext(cache=cache, universe=universe_codes, as_of=d)
+        for f in constructed:
+            try:
+                scores = f.compute(ctx_obj)
+            except Exception as e:
+                log.warning("factor %s compute failed at %s: %s", f.name, d, e)
+                continue
+            if scores is not None and not scores.empty:
+                scores_by_factor[f.name][d] = scores
+
+    matrix = pairwise_factor_correlation(scores_by_factor)
+    matrix_ordered = matrix.reindex(index=names, columns=names)
+    matrix_values = [
+        [float(matrix_ordered.iloc[i, j]) for j in range(len(names))]
+        for i in range(len(names))
+    ]
+
+    n_dates = max(
+        (len(scores_by_factor[name]) for name in names if name in scores_by_factor),
+        default=0,
+    )
+
+    return FactorCorrelationResponse(
+        factors=names, matrix=matrix_values,
+        universe=universe, start=start, end=end,
+        rebalance=rebalance, n_dates=n_dates,
+    )
 
 
 # --- Portfolio (Sprint 3) -------------------------------------------------
