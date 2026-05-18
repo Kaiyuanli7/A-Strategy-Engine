@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply font-sans antialiased;
+  }
+  h1 {
+    @apply text-2xl font-semibold;
+  }
+  h2 {
+    @apply text-xl font-semibold;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-ink-100 rounded-lg shadow-sm p-4;
+  }
+  .metric-key {
+    @apply text-xs uppercase tracking-wider text-ink-400;
+  }
+  .metric-val {
+    @apply text-lg font-semibold tabular-nums;
+  }
+  .pos {
+    @apply text-accent-green;
+  }
+  .neg {
+    @apply text-accent-red;
+  }
+  .nav-link {
+    @apply px-3 py-1.5 rounded-md hover:bg-ink-100;
+  }
+  .nav-link-active {
+    @apply bg-ink-800 text-white hover:bg-ink-800;
+  }
+  table.data {
+    @apply w-full text-sm border-collapse;
+  }
+  table.data th {
+    @apply text-left text-xs uppercase tracking-wider text-ink-400 font-medium px-3 py-2 border-b border-ink-100;
+  }
+  table.data td {
+    @apply px-3 py-2 border-b border-ink-100 tabular-nums;
+  }
+  table.data tr:hover td {
+    @apply bg-ink-50;
+  }
+}

@@ -6,7 +6,8 @@ A-share (Chinese stock market / 沪深A股) trading strategy research platform.
 
 - **Phase 1**: data layer + core backtest engine with A-share constraints — ✅ shipped
 - **Phase 2**: FastAPI REST server wrapping the engine — ✅ shipped
-- **Phase 3+**: React UI, optimizers (grid / Bayesian / walk-forward / genetic), screener — deferred
+- **Phase 3**: React + Tailwind frontend (runs list, results dashboard, screener) — ✅ shipped
+- **Phase 4+**: strategy builder, optimizers (grid / Bayesian / walk-forward / genetic) — deferred
 
 ## Quickstart
 
@@ -47,12 +48,28 @@ curl -X POST http://127.0.0.1:8000/api/backtest/run \
 curl http://127.0.0.1:8000/api/backtest/results/<RUN_ID>
 ```
 
+### Frontend (Phase 3)
+
+```bash
+cd frontend
+npm install
+npm run dev                # vite dev server on :5173 (proxies /api → :8000)
+
+# in another terminal, keep the API running
+python scripts/run_api.py
+```
+
+Open http://127.0.0.1:5173 to see the runs list. Click "Run dual-MA on demo universe"
+to kick off a backtest, then navigate to the results dashboard (equity curve, drawdown,
+metrics panel, trades table) or the screener for per-stock OHLCV charts.
+
 ## Architecture
 
 - `astrategy/data/` — AKShare wrapper, SQLite cache, universe loader, synthetic fallback
 - `astrategy/engine/` — backtest loop with full A-share constraints (T+1, price limits, lot sizes, costs)
 - `astrategy/strategies/` — Strategy ABC and reference implementations
 - `astrategy/api/` — FastAPI server, Pydantic schemas, backtest persistence
+- `frontend/` — React + Tailwind + Recharts SPA (runs list, dashboard, screener)
 - `scripts/` — entry-point scripts (fetch data, run backtest, launch API)
 - `tests/` — unit + integration + API tests (47 passing)
 
