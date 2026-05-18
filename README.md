@@ -132,11 +132,16 @@ report to `data/evaluations/`.
 ### 4. Real-data path (when you're on a network with eastmoney/sina access)
 
 ```bash
-python scripts/smoke_real_akshare.py    # verify endpoints work; flags any drift
-python scripts/prime_csi300.py          # prime real CSI 300 OHLCV + extras
+# Verify endpoints work; the script flags any AKShare drift.
+python scripts/smoke_real_akshare.py
+
+# Prime real CSI 300 constituents + qfq OHLCV + best-effort real northbound.
+# Fundamentals / valuation / sector are still filled in synthetically — the
+# script labels them clearly in its summary.
+python scripts/prime_csi300.py
 ```
 
-Then re-run `evaluate_factor.py` — same flags, real numbers.
+Then re-run `evaluate_factor.py` — same flags, real OHLCV.
 
 ### 5. Run the full stack (two terminals)
 
