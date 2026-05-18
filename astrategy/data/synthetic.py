@@ -153,11 +153,13 @@ def generate_synthetic_fundamentals(code: str, start: str, end: str) -> pd.DataF
     rng = np.random.default_rng(_seed_from_code(code, salt=1))
     anchor = _anchor_for(code)
     quarters = _quarter_ends(start, end)
+    cols = [
+        "report_date", "announce_date", "pe_ttm", "pb", "ps_ttm",
+        "roe_ttm", "revenue_yoy", "net_profit_yoy", "eps_ttm",
+        "operating_cash_flow_ttm", "net_income_ttm",
+    ]
     if not quarters:
-        return pd.DataFrame(columns=[
-            "report_date", "announce_date", "pe_ttm", "pb", "ps_ttm",
-            "roe_ttm", "revenue_yoy", "net_profit_yoy", "eps_ttm",
-        ])
+        return pd.DataFrame(columns=cols)
 
     n = len(quarters)
     # Wobble each metric around the anchor: roe ±3pp, rev_yoy ±10pp, pe ±20%, pb ±15%
@@ -169,6 +171,11 @@ def generate_synthetic_fundamentals(code: str, start: str, end: str) -> pd.DataF
     ps = pe * 0.25 * (1 + rng.normal(0, 0.10, n))
     # Synthetic EPS — anchor / pe gives close-price-relative; fine for demo
     eps = np.maximum(0.1, anchor["pe"] / np.maximum(pe, 1.0))
+    # NI ~ mkt_cap / pe; OCF wobbles around 0.85 * NI so ~70% of quarters
+    # clear the 0.7 OCF/NI gate used by EarningsQualityFactor.
+    ni = np.maximum(1.0, anchor["mkt_cap"] / np.maximum(pe, 1.0))
+    ocf_ratio = np.clip(0.85 + rng.normal(0, 0.25, n), 0.1, 1.6)
+    ocf = ni * ocf_ratio
 
     return pd.DataFrame({
         "report_date": [q.strftime("%Y-%m-%d") for q in quarters],
@@ -180,6 +187,8 @@ def generate_synthetic_fundamentals(code: str, start: str, end: str) -> pd.DataF
         "revenue_yoy": np.round(rev, 2),
         "net_profit_yoy": np.round(npy, 2),
         "eps_ttm": np.round(eps, 3),
+        "operating_cash_flow_ttm": np.round(ocf, 0),
+        "net_income_ttm": np.round(ni, 0),
     })
 
 

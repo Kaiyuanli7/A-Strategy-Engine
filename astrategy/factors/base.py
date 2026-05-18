@@ -41,6 +41,27 @@ class FactorContext:
         """Latest pre-as_of valuation row per code in universe. Indexed by code."""
         return self.cache.cross_sectional_valuation_as_of(self.universe, self.as_of_str())
 
+    def bars(self, code: str, lookback_days: int = 60) -> pd.DataFrame:
+        """
+        OHLCV bars strictly before as_of, indexed by date ascending.
+
+        Used by technical / behavioral factors. PIT discipline: the factor
+        sees close[t-1] at the latest when computing for as_of = t.
+        """
+        return self.cache.bars_as_of(code, self.as_of_str(), lookback_days)
+
+    def fundamentals(self, code: str) -> dict | None:
+        """Most recent fundamentals row with announce_date < as_of."""
+        return self.cache.fundamentals_as_of(code, self.as_of_str())
+
+    def recent_fundamentals(self, code: str, k: int = 2) -> pd.DataFrame:
+        """Last `k` fundamentals rows with announce_date < as_of, DESC."""
+        return self.cache.recent_fundamentals_as_of(code, self.as_of_str(), k)
+
+    def valuation_history(self, code: str, lookback_days: int = 756) -> pd.DataFrame:
+        """Trailing valuation history strictly before as_of (default ~3 trading years)."""
+        return self.cache.valuation_history_as_of(code, self.as_of_str(), lookback_days)
+
 
 class FactorParamSpec(BaseModel):
     """Description of one tunable parameter on a Factor (drives API + UI)."""

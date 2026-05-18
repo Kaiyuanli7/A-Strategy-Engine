@@ -55,16 +55,18 @@ CREATE TABLE IF NOT EXISTS fetch_log (
 -- Phase 4 additions ---------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS fundamentals (
-    code           TEXT NOT NULL,
-    report_date    TEXT NOT NULL,
-    announce_date  TEXT NOT NULL,
-    pe_ttm         REAL,
-    pb             REAL,
-    ps_ttm         REAL,
-    roe_ttm        REAL,
-    revenue_yoy    REAL,
-    net_profit_yoy REAL,
-    eps_ttm        REAL,
+    code                     TEXT NOT NULL,
+    report_date              TEXT NOT NULL,
+    announce_date            TEXT NOT NULL,
+    pe_ttm                   REAL,
+    pb                       REAL,
+    ps_ttm                   REAL,
+    roe_ttm                  REAL,
+    revenue_yoy              REAL,
+    net_profit_yoy           REAL,
+    eps_ttm                  REAL,
+    operating_cash_flow_ttm  REAL,
+    net_income_ttm           REAL,
     PRIMARY KEY (code, report_date)
 );
 CREATE INDEX IF NOT EXISTS idx_fund_announce ON fundamentals(code, announce_date);
@@ -188,6 +190,18 @@ class SQLiteCache:
     def _init_schema(self) -> None:
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            # Backfill columns on databases created before the schema bump
+            # (fresh DBs already have them via the CREATE TABLE above).
+            self._migrate_add_column(conn, "fundamentals", "operating_cash_flow_ttm", "REAL")
+            self._migrate_add_column(conn, "fundamentals", "net_income_ttm", "REAL")
+
+    @staticmethod
+    def _migrate_add_column(conn: sqlite3.Connection, table: str, col: str, col_type: str) -> None:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            # Column already exists — idempotent no-op
+            pass
 
     def upsert_daily_bars(self, code: str, df: pd.DataFrame) -> int:
         if df is None or df.empty:
@@ -313,13 +327,16 @@ class SQLiteCache:
                 self._opt(r.get("ps_ttm")), self._opt(r.get("roe_ttm")),
                 self._opt(r.get("revenue_yoy")), self._opt(r.get("net_profit_yoy")),
                 self._opt(r.get("eps_ttm")),
+                self._opt(r.get("operating_cash_flow_ttm")),
+                self._opt(r.get("net_income_ttm")),
             ))
         with self._conn() as conn:
             conn.executemany(
                 "INSERT OR REPLACE INTO fundamentals "
                 "(code, report_date, announce_date, pe_ttm, pb, ps_ttm, roe_ttm, "
-                "revenue_yoy, net_profit_yoy, eps_ttm) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "revenue_yoy, net_profit_yoy, eps_ttm, "
+                "operating_cash_flow_ttm, net_income_ttm) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
         return len(rows)
@@ -328,7 +345,9 @@ class SQLiteCache:
         """Return fundamentals ordered by announce_date (point-in-time)."""
         sql = (
             "SELECT report_date, announce_date, pe_ttm, pb, ps_ttm, roe_ttm, "
-            "revenue_yoy, net_profit_yoy, eps_ttm FROM fundamentals WHERE code = ?"
+            "revenue_yoy, net_profit_yoy, eps_ttm, "
+            "operating_cash_flow_ttm, net_income_ttm "
+            "FROM fundamentals WHERE code = ?"
         )
         params: list = [code]
         if start:
@@ -542,6 +561,78 @@ class SQLiteCache:
                 "SELECT code FROM stock_meta WHERE board != 'index' ORDER BY code"
             ).fetchall()
         return [r["code"] for r in rows]
+
+    def bars_as_of(
+        self, code: str, as_of: str, lookback_days: int = 60,
+    ) -> pd.DataFrame:
+        """
+        OHLCV bars strictly BEFORE as_of, indexed by date ascending.
+
+        Used by technical factors that need a trailing price window. PIT
+        discipline: factor on day t looks at close[<t].
+        """
+        with self._conn() as conn:
+            df = pd.read_sql_query(
+                "SELECT date, open, high, low, close, volume, amount, pct_change, turnover "
+                "FROM daily_bars WHERE code = ? AND date < ? "
+                "AND date >= date(?, '-' || ? || ' days') ORDER BY date",
+                conn,
+                params=(code, as_of, as_of, lookback_days),
+            )
+        if not df.empty:
+            df["date"] = pd.to_datetime(df["date"])
+        return df
+
+    def fundamentals_as_of(self, code: str, as_of: str) -> dict | None:
+        """Most recent fundamentals row with announce_date < as_of."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT report_date, announce_date, pe_ttm, pb, ps_ttm, roe_ttm, "
+                "revenue_yoy, net_profit_yoy, eps_ttm, "
+                "operating_cash_flow_ttm, net_income_ttm "
+                "FROM fundamentals WHERE code = ? AND announce_date < ? "
+                "ORDER BY announce_date DESC LIMIT 1",
+                (code, as_of),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def recent_fundamentals_as_of(
+        self, code: str, as_of: str, k: int = 2,
+    ) -> pd.DataFrame:
+        """Last `k` fundamentals rows with announce_date < as_of, DESC by announce_date."""
+        with self._conn() as conn:
+            df = pd.read_sql_query(
+                "SELECT report_date, announce_date, pe_ttm, pb, ps_ttm, roe_ttm, "
+                "revenue_yoy, net_profit_yoy, eps_ttm, "
+                "operating_cash_flow_ttm, net_income_ttm "
+                "FROM fundamentals WHERE code = ? AND announce_date < ? "
+                "ORDER BY announce_date DESC LIMIT ?",
+                conn,
+                params=(code, as_of, k),
+            )
+        if not df.empty:
+            df["announce_date"] = pd.to_datetime(df["announce_date"])
+            df["report_date"] = pd.to_datetime(df["report_date"])
+        return df
+
+    def valuation_history_as_of(
+        self, code: str, as_of: str, lookback_days: int = 756,
+    ) -> pd.DataFrame:
+        """
+        Valuation rows strictly BEFORE as_of, ascending. Default ~3 trading years.
+        Used by valuation-percentile factors.
+        """
+        with self._conn() as conn:
+            df = pd.read_sql_query(
+                "SELECT date, pe_ttm, pb, ps_ttm, mkt_cap, float_cap "
+                "FROM valuation_daily WHERE code = ? AND date < ? "
+                "AND date >= date(?, '-' || ? || ' days') ORDER BY date",
+                conn,
+                params=(code, as_of, as_of, lookback_days),
+            )
+        if not df.empty:
+            df["date"] = pd.to_datetime(df["date"])
+        return df
 
     def northbound_as_of(
         self, code: str, as_of: str, lookback_days: int = 30,
