@@ -194,6 +194,25 @@ export interface FillRecord {
   rejected_reason?: string | null
 }
 
+export interface HoldingRecord {
+  code: string
+  shares: number
+  avg_cost: number
+  market_value: number
+  pnl: number
+  pnl_pct: number
+  last_price: number
+  entry_date: string
+  sector: string | null
+}
+
+export interface SectorWeight {
+  sector: string
+  weight: number
+  n_stocks: number
+  market_value: number
+}
+
 export interface PortfolioResult {
   run_id: string
   status: string
@@ -202,6 +221,8 @@ export interface PortfolioResult {
   equity_curve: EquityPoint[]
   fills: FillRecord[]
   rejections: FillRecord[]
+  final_holdings: HoldingRecord[]
+  sector_exposure: SectorWeight[]
   error: string | null
 }
 

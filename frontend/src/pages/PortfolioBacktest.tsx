@@ -4,11 +4,17 @@ import { api } from '@/api/client'
 import CompositeBuilder from '@/components/portfolio/CompositeBuilder'
 import DrawdownChart from '@/components/portfolio/DrawdownChart'
 import EquityCurveChart from '@/components/portfolio/EquityCurveChart'
+import FactorAttributionPanel from '@/components/portfolio/FactorAttributionPanel'
 import FillsTable from '@/components/portfolio/FillsTable'
+import HoldingsPanel from '@/components/portfolio/HoldingsPanel'
+import MonthlyHeatmap from '@/components/portfolio/MonthlyHeatmap'
+import RegimePanel from '@/components/portfolio/RegimePanel'
+import SectorExposureChart from '@/components/portfolio/SectorExposureChart'
 import SummaryPanel from '@/components/portfolio/SummaryPanel'
+import TldrCard from '@/components/portfolio/TldrCard'
 import type {
   CompositeSpec, FactorMeta, PortfolioBacktestRequest,
-  PortfolioConfigSpec, PortfolioResult,
+  PortfolioConfigSpec, PortfolioResult, StockBar,
 } from '@/types/api'
 
 
@@ -46,13 +52,27 @@ export default function PortfolioBacktest() {
     api.factors().then(setFactors).catch((e) => setErr(String(e)))
   }, [])
 
+  const [benchmark, setBenchmark] = useState<StockBar[] | null>(null)
+
   useEffect(() => {
     if (!runId) {
       setResult(null)
+      setBenchmark(null)
       return
     }
     api.portfolioResult(runId).then(setResult).catch((e) => setErr(String(e)))
   }, [runId])
+
+  // Fetch CSI 300 benchmark once we know the run's period.
+  useEffect(() => {
+    if (!result) {
+      setBenchmark(null)
+      return
+    }
+    api.stock('000300', result.config.start, result.config.end)
+      .then((s) => setBenchmark(s.bars))
+      .catch(() => setBenchmark([]))   // benchmark missing isn't fatal
+  }, [result])
 
   const submit = async () => {
     if (composite.factors.length === 0) {
@@ -81,6 +101,9 @@ export default function PortfolioBacktest() {
   if (runId) {
     if (err) return <div className="card border-accent-red text-accent-red">{err}</div>
     if (!result) return <div className="text-ink-400">Loading…</div>
+    const summary = result.summary as Record<string, unknown> | null
+    const attribution = (summary?.factor_attribution as Parameters<typeof FactorAttributionPanel>[0]['attribution']) ?? null
+    const regimes = (summary?.regime_metrics as Parameters<typeof RegimePanel>[0]['regimes']) ?? null
     return (
       <div className="space-y-4">
         <div className="flex items-baseline justify-between">
@@ -92,16 +115,44 @@ export default function PortfolioBacktest() {
             ← new backtest
           </Link>
         </div>
+
+        <TldrCard
+          equity={result.equity_curve}
+          initialEquity={result.config.initial_cash}
+          benchmark={benchmark ?? undefined}
+          summary={result.summary}
+        />
+
         <SummaryPanel summary={result.summary} />
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2">
             <EquityCurveChart
               data={result.equity_curve}
               initialEquity={result.config.initial_cash}
+              benchmark={benchmark ?? undefined}
             />
           </div>
           <DrawdownChart data={result.equity_curve} />
         </div>
+
+        <MonthlyHeatmap data={result.equity_curve} />
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <FactorAttributionPanel attribution={attribution} />
+          <RegimePanel regimes={regimes} />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-2">
+            <HoldingsPanel holdings={result.final_holdings} />
+          </div>
+          <SectorExposureChart
+            exposure={result.sector_exposure}
+            maxSectorPct={result.config.portfolio.max_sector_pct}
+          />
+        </div>
+
         <FillsTable fills={result.fills} rejections={result.rejections} />
       </div>
     )
