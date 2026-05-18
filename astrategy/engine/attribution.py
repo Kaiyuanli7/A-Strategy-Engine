@@ -1,10 +1,19 @@
 """
-Factor attribution: OLS regression of strategy daily returns against a
-small set of constructed factor portfolios (mkt, val, mom, size, vol).
+Post-hoc portfolio attribution: OLS regression of strategy daily returns
+against a small set of constructed factor portfolios (mkt, val, mom, size,
+vol).
 
-The factor portfolios are built from cached data — they're not perfect
-factor mimics, but they're good enough to decompose strategy returns
-into "what kind of bets is this strategy taking?"
+This is the **portfolio-level** layer. It answers: "what kind of bets is
+this strategy taking, decomposed against canonical factors?"
+
+It is complementary to `astrategy/evaluation/` (Sprint 1), which is the
+**individual-factor predictive-power** layer (IC / quintile / decay /
+correlation). Sprint 3 wires the top-N portfolio strategy and uses both:
+`evaluation/` to validate each factor pre-deployment; `attribution.py` to
+decompose realized P&L after backtests.
+
+The factor portfolios here are not perfect academic factor mimics, but
+they're good enough for the "where did the return come from?" question.
 """
 
 from __future__ import annotations
