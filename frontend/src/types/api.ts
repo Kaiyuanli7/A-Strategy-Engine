@@ -237,3 +237,45 @@ export interface PortfolioRunListItem {
   sharpe: number | null
   total_return: number | null
 }
+
+
+// --- Walk-forward weight optimization (Sprint 3.5) -------------------------
+
+export interface WalkForwardRunListItem {
+  run_id: string
+  status: string
+  strategy_type: string
+  aggregate_oos_sharpe: number | null
+  overfit_flag: boolean | null
+  n_windows: number | null
+  created_at: string
+}
+
+export interface WalkForwardWindowResult {
+  window_idx: number
+  train_start: string
+  train_end: string
+  test_start: string
+  test_end: string
+  is_sharpe: number
+  oos_sharpe: number | null
+  weights: Record<string, number>
+}
+
+export interface WalkForwardAggregate {
+  is_sharpe: number
+  oos_sharpe: number
+  is_oos_gap: number
+  overfit: boolean
+}
+
+export interface WalkForwardResult {
+  run_id: string
+  status: string
+  config: Record<string, unknown>
+  factors: Array<string | [string, Record<string, unknown>]>
+  windows: WalkForwardWindowResult[]
+  aggregate: WalkForwardAggregate | null
+  created_at: string
+  error: string | null
+}

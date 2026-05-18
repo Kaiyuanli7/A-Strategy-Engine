@@ -284,3 +284,35 @@ class WalkForwardRunListItem(BaseModel):
     overfit_flag: bool | None = None
     n_windows: int | None = None
     created_at: str
+
+
+# --- Walk-forward weight optimization (Sprint 3.5) -------------------------
+
+class WalkForwardWindowResult(BaseModel):
+    """One IS/OOS window from the weight optimizer."""
+    window_idx: int
+    train_start: str
+    train_end: str
+    test_start: str
+    test_end: str
+    is_sharpe: float
+    oos_sharpe: float | None = None       # None on OOS data unavailable
+    weights: dict[str, float]
+
+
+class WalkForwardAggregate(BaseModel):
+    is_sharpe: float
+    oos_sharpe: float
+    is_oos_gap: float
+    overfit: bool
+
+
+class WalkForwardResultResponse(BaseModel):
+    run_id: str
+    status: str
+    config: dict[str, Any] = Field(default_factory=dict)
+    factors: list[Any] = Field(default_factory=list)
+    windows: list[WalkForwardWindowResult] = Field(default_factory=list)
+    aggregate: WalkForwardAggregate | None = None
+    created_at: str
+    error: str | None = None

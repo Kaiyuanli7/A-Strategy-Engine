@@ -165,10 +165,15 @@ export default function PortfolioBacktest() {
     <div className="space-y-4">
       <div className="flex items-baseline justify-between">
         <h1>Portfolio backtest</h1>
-        <div className="text-xs text-ink-400">
-          Build a 1-5 factor composite and run a top-N portfolio backtest with
-          full A-share constraints (T+1, price limits, costs).
+        <div className="flex items-center gap-3">
+          <Link to="/portfolio/runs" className="text-sm text-accent-blue underline">
+            past runs →
+          </Link>
         </div>
+      </div>
+      <div className="text-xs text-ink-400">
+        Build a 1-5 factor composite and run a top-N portfolio backtest with
+        full A-share constraints (T+1, price limits, costs).
       </div>
 
       {err && <div className="card border-accent-red text-accent-red text-sm">{err}</div>}

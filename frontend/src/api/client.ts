@@ -10,6 +10,8 @@ import type {
   PortfolioRunListItem,
   StockOHLCV,
   Universe,
+  WalkForwardResult,
+  WalkForwardRunListItem,
 } from '@/types/api'
 
 const BASE = '' // vite proxy forwards /api → backend in dev; absolute in prod
@@ -81,4 +83,8 @@ export const api = {
   portfolioResult: (runId: string) =>
     req<PortfolioResult>(`/api/portfolios/runs/${runId}`),
   portfolioRuns: () => req<PortfolioRunListItem[]>('/api/portfolios/runs'),
+  walkForwardRuns: () =>
+    req<WalkForwardRunListItem[]>('/api/walk_forward/runs'),
+  walkForwardResult: (runId: string) =>
+    req<WalkForwardResult>(`/api/walk_forward/runs/${runId}`),
 }

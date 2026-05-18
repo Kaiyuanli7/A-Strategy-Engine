@@ -40,7 +40,10 @@ from astrategy.api.schemas import (
     StockOHLCVResponse,
     UniverseResponse,
     UniverseStock,
+    WalkForwardAggregate,
+    WalkForwardResultResponse,
     WalkForwardRunListItem,
+    WalkForwardWindowResult,
 )
 from astrategy.api.storage import RunStorage
 from astrategy.composites import (
@@ -312,6 +315,48 @@ def list_walk_forward_runs(
     limit: int = Query(50, ge=1, le=500),
 ) -> list[WalkForwardRunListItem]:
     return [WalkForwardRunListItem(**r) for r in storage.list_walk_forward_runs(limit=limit)]
+
+
+@app.get(
+    "/api/walk_forward/runs",
+    response_model=list[WalkForwardRunListItem],
+    tags=["walk_forward"],
+)
+def list_walk_forward_runs_v2(
+    storage: Annotated[RunStorage, Depends(get_storage)],
+    limit: int = Query(50, ge=1, le=500),
+) -> list[WalkForwardRunListItem]:
+    """Sprint 3.5 walk-forward weight-optimization runs."""
+    return [WalkForwardRunListItem(**r) for r in storage.list_walk_forward_runs(limit=limit)]
+
+
+@app.get(
+    "/api/walk_forward/runs/{run_id}",
+    response_model=WalkForwardResultResponse,
+    tags=["walk_forward"],
+)
+def get_walk_forward_run(
+    run_id: str,
+    storage: Annotated[RunStorage, Depends(get_storage)],
+) -> WalkForwardResultResponse:
+    row = storage.get_walk_forward_run(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"walk-forward run {run_id} not found")
+
+    cfg = row["config"] or {}
+    res = row["result"] or {}
+    factors = cfg.get("factors", [])
+    windows_raw = res.get("windows", []) or []
+    windows = [WalkForwardWindowResult(**w) for w in windows_raw]
+    agg = None
+    if res.get("aggregate"):
+        agg = WalkForwardAggregate(**res["aggregate"])
+    return WalkForwardResultResponse(
+        run_id=row["id"], status=row["status"],
+        config=cfg, factors=factors,
+        windows=windows, aggregate=agg,
+        created_at=row["created_at"], error=row.get("error"),
+    )
 
 
 @app.get(

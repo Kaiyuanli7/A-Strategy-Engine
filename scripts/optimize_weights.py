@@ -278,8 +278,7 @@ def main() -> int:
     print(f"  IS - OOS gap:   {gap:+.3f}  ({'OVERFIT' if abs(gap) > 0.5 else 'OK'})")
 
     timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-    out_path = out_dir / f"walkforward_{timestamp}.json"
-    out_path.write_text(json.dumps({
+    payload = {
         "config": vars(args),
         "factors": factor_specs,
         "windows": results,
@@ -289,8 +288,20 @@ def main() -> int:
             "is_oos_gap": gap,
             "overfit": bool(abs(gap) > 0.5),
         },
-    }, indent=2, default=str))
+    }
+    out_path = out_dir / f"walkforward_{timestamp}.json"
+    out_path.write_text(json.dumps(payload, indent=2, default=str))
     print(f"\n  → wrote {out_path}")
+
+    # Also persist to SQLite so the frontend /walkforward page can read it.
+    try:
+        from astrategy.api.storage import RunStorage
+        storage = RunStorage()
+        run_id = storage.new_walk_forward_run({"factors": factor_specs, "args": vars(args)})
+        storage.save_walk_forward_result(run_id, payload)
+        print(f"  → persisted to DB as run_id={run_id}")
+    except Exception as e:
+        print(f"  (DB persistence skipped: {e})")
     return 0
 
 

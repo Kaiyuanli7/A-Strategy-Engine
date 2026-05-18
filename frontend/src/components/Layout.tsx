@@ -41,6 +41,14 @@ export default function Layout() {
             >
               Portfolio
             </NavLink>
+            <NavLink
+              to="/walkforward"
+              className={({ isActive }) =>
+                'nav-link' + (isActive ? ' nav-link-active' : '')
+              }
+            >
+              Walk-Forward
+            </NavLink>
           </nav>
           <div className="ml-auto text-xs text-ink-400 font-mono">
             {health ? (
