@@ -96,6 +96,17 @@ export interface QuintileSummary {
   avg_turnover: number
 }
 
+export interface FactorCorrelation {
+  factors: string[]
+  matrix: number[][]
+  universe: string
+  start: string
+  end: string
+  rebalance: 'daily' | 'weekly' | 'monthly'
+  n_dates: number
+}
+
+
 export interface FactorEvaluation {
   factor: FactorMeta
   params: Record<string, unknown>
@@ -122,4 +133,219 @@ export interface EvaluateParams {
   rebalance: 'daily' | 'weekly' | 'monthly'
   lookback?: number
   use_cache?: boolean
+}
+
+
+// --- Portfolio Backtest (Sprint 3) ------------------------------------------
+
+export interface FactorWeightSpec {
+  factor_name: string
+  params: Record<string, unknown>
+  weight: number | null
+}
+
+export interface CompositeSpec {
+  method: 'equal_weight' | 'signed_ic_weighted' | 'fixed_weight'
+  factors: FactorWeightSpec[]
+  rolling_window?: number
+  min_ic_abs?: number
+}
+
+export interface PortfolioConfigSpec {
+  top_n: number
+  rebalance_freq: 'weekly' | 'monthly'
+  max_sector_pct: number
+  max_single_position_pct: number
+  min_market_cap: number
+  exclude_st: boolean
+  weighting: 'equal'
+}
+
+export interface PortfolioBacktestRequest {
+  composite: CompositeSpec
+  portfolio: PortfolioConfigSpec
+  universe: string
+  start: string
+  end: string
+  initial_cash: number
+  limit_hit_fill_prob: number
+  random_seed: number
+}
+
+export interface PortfolioBacktestResponse {
+  run_id: string
+  status: 'completed' | 'failed'
+  summary: Record<string, unknown> | null
+  error: string | null
+}
+
+export interface EquityPoint {
+  date: string
+  equity: number
+}
+
+export interface FillRecord {
+  date: string
+  code: string
+  side: 'buy' | 'sell'
+  shares: number
+  price: number
+  cost: number
+  rejected_reason?: string | null
+}
+
+export interface HoldingRecord {
+  code: string
+  shares: number
+  avg_cost: number
+  market_value: number
+  pnl: number
+  pnl_pct: number
+  last_price: number
+  entry_date: string
+  sector: string | null
+}
+
+export interface SectorWeight {
+  sector: string
+  weight: number
+  n_stocks: number
+  market_value: number
+}
+
+export interface PortfolioResult {
+  run_id: string
+  status: string
+  config: PortfolioBacktestRequest
+  summary: Record<string, unknown> | null
+  equity_curve: EquityPoint[]
+  fills: FillRecord[]
+  rejections: FillRecord[]
+  final_holdings: HoldingRecord[]
+  sector_exposure: SectorWeight[]
+  error: string | null
+}
+
+export interface PortfolioRunListItem {
+  run_id: string
+  status: string
+  strategy_type: string
+  universe_size: number
+  start: string
+  end: string
+  created_at: string
+  sharpe: number | null
+  total_return: number | null
+}
+
+
+// --- Chart (Sprint 4) ------------------------------------------------------
+
+export interface ChartCandle {
+  time: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface ChartLinePoint {
+  time: string
+  value: number | null
+}
+
+export interface ChartMACDPoint {
+  time: string
+  macd: number | null
+  signal: number | null
+  histogram: number | null
+}
+
+export interface ChartSignal {
+  time: string
+  side: 'buy' | 'sell'
+  price: number
+  shares: number
+  cost: number
+  reason: string | null
+  rejected_reason: string | null
+}
+
+export interface ChartResponse {
+  code: string
+  name: string | null
+  sector: string | null
+  candles: ChartCandle[]
+  indicators: Record<string, ChartLinePoint[]>
+  macd: ChartMACDPoint[]
+  signals: ChartSignal[]
+  run_id: string | null
+}
+
+
+// --- Live Screener (Sprint 4) ----------------------------------------------
+
+export interface ScreenerEntry {
+  rank: number
+  code: string
+  name: string | null
+  sector: string | null
+  last_price: number | null
+  market_cap: number | null
+  is_st: boolean
+  composite_score: number
+  factor_scores: Record<string, number>
+}
+
+export interface ScreenerResponse {
+  as_of: string
+  universe: string
+  composite_method: 'equal_weight' | 'signed_ic_weighted' | 'fixed_weight'
+  factors: string[]
+  top_n: number
+  total_ranked: number
+  entries: ScreenerEntry[]
+}
+
+
+// --- Walk-forward weight optimization (Sprint 3.5) -------------------------
+
+export interface WalkForwardRunListItem {
+  run_id: string
+  status: string
+  strategy_type: string
+  aggregate_oos_sharpe: number | null
+  overfit_flag: boolean | null
+  n_windows: number | null
+  created_at: string
+}
+
+export interface WalkForwardWindowResult {
+  window_idx: number
+  train_start: string
+  train_end: string
+  test_start: string
+  test_end: string
+  is_sharpe: number
+  oos_sharpe: number | null
+  weights: Record<string, number>
+}
+
+export interface WalkForwardAggregate {
+  is_sharpe: number
+  oos_sharpe: number
+  is_oos_gap: number
+  overfit: boolean
+}
+
+export interface WalkForwardResult {
+  run_id: string
+  status: string
+  config: Record<string, unknown>
+  factors: Array<string | [string, Record<string, unknown>]>
+  windows: WalkForwardWindowResult[]
+  aggregate: WalkForwardAggregate | null
+  created_at: string
+  error: string | null
 }

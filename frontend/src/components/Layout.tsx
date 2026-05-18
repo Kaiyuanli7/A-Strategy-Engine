@@ -25,6 +25,38 @@ export default function Layout() {
             >
               Factor Lab
             </NavLink>
+            <NavLink
+              to="/correlation"
+              className={({ isActive }) =>
+                'nav-link' + (isActive ? ' nav-link-active' : '')
+              }
+            >
+              Correlation
+            </NavLink>
+            <NavLink
+              to="/screener"
+              className={({ isActive }) =>
+                'nav-link' + (isActive ? ' nav-link-active' : '')
+              }
+            >
+              Screener
+            </NavLink>
+            <NavLink
+              to="/portfolio"
+              className={({ isActive }) =>
+                'nav-link' + (isActive ? ' nav-link-active' : '')
+              }
+            >
+              Portfolio
+            </NavLink>
+            <NavLink
+              to="/walkforward"
+              className={({ isActive }) =>
+                'nav-link' + (isActive ? ' nav-link-active' : '')
+              }
+            >
+              Walk-Forward
+            </NavLink>
           </nav>
           <div className="ml-auto text-xs text-ink-400 font-mono">
             {health ? (

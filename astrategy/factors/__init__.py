@@ -24,6 +24,8 @@ from astrategy.factors.registry import (
 
 # Importing each factor module registers its factor with the registry.
 from astrategy.factors import northbound  # noqa: F401  (import for side effects)
+from astrategy.factors import technical  # noqa: F401
+from astrategy.factors import fundamental  # noqa: F401
 
 
 __all__ = [

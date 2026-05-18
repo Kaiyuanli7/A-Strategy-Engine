@@ -42,7 +42,17 @@ def main() -> int:
     parser.add_argument("--horizon", type=int, default=20)
     parser.add_argument("--rebalance", default="weekly", choices=["daily", "weekly", "monthly"])
     parser.add_argument("--lookback", type=int, default=None,
-                        help="Override factor's default lookback (param)")
+                        help="Override factor's default lookback (Factor 1.1, 3.2)")
+    parser.add_argument("--window", type=int, default=None,
+                        help="Factor 1.2: per-side flow window")
+    parser.add_argument("--gap", type=int, default=None,
+                        help="Factor 1.2: gap between flow windows")
+    parser.add_argument("--skip", type=int, default=None,
+                        help="Factor 3.2: trading days to skip at the recent end")
+    parser.add_argument("--min-ocf-ratio", type=float, default=None,
+                        help="Factor 2.1: OCF/NI quality gate")
+    parser.add_argument("--history-days", type=int, default=None,
+                        help="Factor 2.4: trailing percentile window in calendar days")
     parser.add_argument("--n-quintiles", type=int, default=5)
     parser.add_argument("--no-prime-if-empty", action="store_true",
                         help="Don't auto-prime synthetic universe when cache is empty")
@@ -76,9 +86,16 @@ def main() -> int:
             print(f"  - {n}")
         return 2
 
-    params: dict = {}
-    if args.lookback is not None:
-        params["lookback"] = args.lookback
+    valid = {p.name for p in factor_cls.param_specs()}
+    incoming = {
+        "lookback": args.lookback,
+        "window": args.window,
+        "gap": args.gap,
+        "skip": args.skip,
+        "min_ocf_ratio": args.min_ocf_ratio,
+        "history_days": args.history_days,
+    }
+    params = {k: v for k, v in incoming.items() if v is not None and k in valid}
     factor = factor_cls(**params)
 
     config = EvaluationConfig(

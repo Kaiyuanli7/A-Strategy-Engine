@@ -72,3 +72,72 @@ class NorthboundMomentumFactor(Factor):
         if not scores:
             return pd.Series(dtype="float64")
         return pd.Series(scores, name=self.name).replace([np.inf, -np.inf], np.nan).dropna()
+
+
+@register_factor
+class NorthboundAccelerationFactor(Factor):
+    """
+    Factor 1.2 — Northbound Holding Acceleration (北向资金加速度).
+
+    Thesis: acceleration of foreign buying signals strengthening conviction
+    — institutions are not just maintaining a position but ramping it.
+
+    Score: difference between two consecutive trailing windows of net-buy
+    value, normalized by free-float market cap:
+
+        (sum(net_buy[t-window:t]) - sum(net_buy[t-window-gap:t-gap])) / float_cap
+
+    Higher score = recent window outpacing the earlier one.
+    """
+
+    name: ClassVar[str] = "northbound_acceleration"
+    category: ClassVar[str] = "flow"
+    description: ClassVar[str] = (
+        "Second-derivative of northbound flow: latest window's net-buy minus "
+        "the prior window's, normalized by free-float market cap. Captures "
+        "institutions ramping rather than maintaining a position."
+    )
+    lookback_days: ClassVar[int] = 60
+    rebalance_freq: ClassVar[str] = "weekly"
+    _param_specs: ClassVar[list[FactorParamSpec]] = [
+        FactorParamSpec(name="window", type="int", default=5, min=2, max=30,
+                        description="Trailing trading-day window per side."),
+        FactorParamSpec(name="gap", type="int", default=5, min=1, max=20,
+                        description="Gap between the two windows."),
+    ]
+
+    def compute(self, ctx: FactorContext) -> pd.Series:
+        window = int(self.params["window"])
+        gap = int(self.params["gap"])
+        # Need window + gap trading days; pad heavily for holidays/weekends.
+        calendar_window = max((window + gap) * 3, 30)
+
+        scores: dict[str, float] = {}
+        for code in ctx.universe:
+            nb = ctx.northbound(code, lookback_days=calendar_window)
+            if nb.empty or len(nb) < window + gap + 1:
+                continue
+            net_buy = nb["net_buy_value"].astype(float).to_numpy()
+            # Recent: last `window` rows. Prior: `window` rows ending `gap` days earlier.
+            recent = float(net_buy[-window:].sum())
+            prior_end = len(net_buy) - gap
+            prior_start = prior_end - window
+            if prior_start < 0:
+                continue
+            prior = float(net_buy[prior_start:prior_end].sum())
+
+            val = ctx.valuation(code)
+            float_cap = (val or {}).get("float_cap") if val else None
+            if float_cap is None or float_cap <= 0:
+                float_cap = (val or {}).get("mkt_cap") if val else None
+                if float_cap is None or float_cap <= 0:
+                    continue
+            scores[code] = (recent - prior) / float(float_cap)
+
+        if not scores:
+            return pd.Series(dtype="float64")
+        return (
+            pd.Series(scores, name=self.name)
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna()
+        )

@@ -94,29 +94,44 @@ def financial_indicators(client) -> dict:
 
 
 def market_index_ohlcv(client) -> dict:
-    """Daily index OHLCV for 沪深300 (code 000300)."""
+    """Daily index OHLCV for 沪深300 (code 000300). Tries multiple endpoints."""
     end = datetime.now().strftime("%Y-%m-%d")
     start = (datetime.now() - timedelta(days=365 * 5)).strftime("%Y-%m-%d")
+    s_compact = start.replace("-", "")
+    e_compact = end.replace("-", "")
     try:
         import akshare as ak
-        for fn_name in ("index_zh_a_hist", "stock_zh_index_daily_em", "index_zh_a_spot_em"):
+        # Each entry: (function name, callable with correct signature, label).
+        attempts = [
+            ("index_zh_a_hist",
+                lambda: ak.index_zh_a_hist(symbol="000300", period="daily",
+                                            start_date=s_compact, end_date=e_compact)),
+            ("stock_zh_index_daily_em",
+                lambda: ak.stock_zh_index_daily_em(symbol="csi000300",
+                                                    start_date=s_compact, end_date=e_compact)),
+            ("stock_zh_index_daily_tx",
+                lambda: ak.stock_zh_index_daily_tx(symbol="sh000300",
+                                                    start_date=s_compact, end_date=e_compact)),
+            ("stock_zh_index_daily",
+                lambda: ak.stock_zh_index_daily(symbol="sh000300")),
+        ]
+        for fn_name, call in attempts:
             fn = getattr(ak, fn_name, None)
             if fn is None:
                 continue
             try:
-                if fn_name == "index_zh_a_hist":
-                    df = fn(symbol="000300", period="daily", start_date=start.replace("-", ""), end_date=end.replace("-", ""))
-                else:
-                    df = fn(symbol="000300")
+                df = call()
                 if df is None or len(df) == 0:
                     continue
                 return {
                     "ok": len(df) > 100,
                     "summary": f"via {fn_name}: {len(df)} rows",
                 }
-            except Exception:
+            except Exception as e:
+                # Keep trying the next endpoint, but surface the last error if all fail.
+                last_err = e
                 continue
-        return {"ok": False, "summary": "no working market-index endpoint"}
+        return {"ok": False, "summary": f"no working market-index endpoint; last error: {last_err}"}
     except Exception as e:
         return {"ok": False, "summary": f"akshare error: {e}"}
 

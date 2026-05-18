@@ -1,10 +1,19 @@
 import type {
+  ChartResponse,
   EvaluateParams,
+  FactorCorrelation,
   FactorEvaluation,
   FactorMeta,
   Health,
+  PortfolioBacktestRequest,
+  PortfolioBacktestResponse,
+  PortfolioResult,
+  PortfolioRunListItem,
+  ScreenerResponse,
   StockOHLCV,
   Universe,
+  WalkForwardResult,
+  WalkForwardRunListItem,
 } from '@/types/api'
 
 const BASE = '' // vite proxy forwards /api → backend in dev; absolute in prod
@@ -54,5 +63,65 @@ export const api = {
     if (params.lookback !== undefined) qs.set('lookback', String(params.lookback))
     if (params.use_cache !== undefined) qs.set('use_cache', String(params.use_cache))
     return req<FactorEvaluation>(`/api/factors/${name}/evaluate?${qs.toString()}`)
+  },
+  factorCorrelation: (
+    factors: string[],
+    start: string,
+    end: string,
+    universe: string,
+    rebalance: 'daily' | 'weekly' | 'monthly' = 'monthly',
+  ) => {
+    const qs = new URLSearchParams({
+      factors: factors.join(','),
+      start, end, universe, rebalance,
+    })
+    return req<FactorCorrelation>(`/api/factors/correlation?${qs.toString()}`)
+  },
+  runPortfolioBacktest: (body: PortfolioBacktestRequest) =>
+    req<PortfolioBacktestResponse>('/api/portfolios/backtest', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  portfolioResult: (runId: string) =>
+    req<PortfolioResult>(`/api/portfolios/runs/${runId}`),
+  portfolioRuns: () => req<PortfolioRunListItem[]>('/api/portfolios/runs'),
+  walkForwardRuns: () =>
+    req<WalkForwardRunListItem[]>('/api/walk_forward/runs'),
+  walkForwardResult: (runId: string) =>
+    req<WalkForwardResult>(`/api/walk_forward/runs/${runId}`),
+  chart: (code: string, opts: {
+    start?: string
+    end?: string
+    indicators?: string[]
+    run_id?: string
+  } = {}) => {
+    const qs = new URLSearchParams()
+    if (opts.start) qs.set('start', opts.start)
+    if (opts.end) qs.set('end', opts.end)
+    if (opts.indicators && opts.indicators.length > 0)
+      qs.set('indicators', opts.indicators.join(','))
+    if (opts.run_id) qs.set('run_id', opts.run_id)
+    return req<ChartResponse>(`/api/chart/${code}${qs.toString() ? '?' + qs.toString() : ''}`)
+  },
+  screener: (opts: {
+    factors: string[]
+    composite_method?: 'equal_weight' | 'signed_ic_weighted' | 'fixed_weight'
+    weights?: number[]
+    universe?: string
+    as_of?: string
+    top_n?: number
+    min_market_cap?: number
+    exclude_st?: boolean
+  }) => {
+    const qs = new URLSearchParams({ factors: opts.factors.join(',') })
+    if (opts.composite_method) qs.set('composite_method', opts.composite_method)
+    if (opts.weights && opts.composite_method === 'fixed_weight')
+      qs.set('weights', opts.weights.join(','))
+    if (opts.universe) qs.set('universe', opts.universe)
+    if (opts.as_of) qs.set('as_of', opts.as_of)
+    if (opts.top_n) qs.set('top_n', String(opts.top_n))
+    if (opts.min_market_cap !== undefined) qs.set('min_market_cap', String(opts.min_market_cap))
+    if (opts.exclude_st !== undefined) qs.set('exclude_st', String(opts.exclude_st))
+    return req<ScreenerResponse>(`/api/screener?${qs.toString()}`)
   },
 }

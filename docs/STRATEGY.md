@@ -47,45 +47,72 @@ without #1 produces a Potemkin platform that experienced quants will see through
 ### What's genuinely good
 
 - **A-share constraint correctness.** T+1, board-specific limits, lot rounding, cost
-  model, suspension detection — this is the foundation everything else depends on,
-  and it's done right with unit tests pinning the formulas.
-- **Engine architecture.** Event-driven loop with strategy hooks; precompute-then-lookup
-  signal pattern; clean order/fill/portfolio separation. Vectorization is a future
-  optimization, not a current need.
-- **Composable strategy pattern.** 13 condition types as a Pydantic discriminated union,
-  PIT-safe fundamentals joins, AND-reduce semantics — this is meaningfully better
-  than what most retail platforms (vectorbt, backtrader naive) produce.
-- **Frontend.** Type-safe API contracts, polished UX, working JSON preview. Not toy-level.
-- **Test coverage.** 130 tests including PIT-leakage regression, golden-value RSI,
-  commission floor edge cases. Real safety net.
+  model, suspension detection — the foundation everything else depends on, with unit
+  tests pinning the formulas.
+- **Engine architecture.** Event-driven loop with strategy hooks; clean order /
+  fill / portfolio separation. Reused by Sprint 3's top-N factor portfolio.
+- **Factor research framework (Sprint 1).** `Factor` ABC + `FactorContext` enforce
+  point-in-time data access by construction. IC / quintile / decay / correlation
+  evaluation is cached per (factor, params) hash. The first factor (Northbound
+  Momentum) is wired E2E: data → compute → evaluate → REST → React.
+- **Walk-forward validation + factor attribution + regime tagging** all shipped in
+  Phase 5; reused by Sprint 3+.
+- **Point-in-time index membership.** `index_constituents_pit` + `load_universe(as_of=...)`
+  means backtests don't accidentally use today's CSI 300 roster for 2022 dates.
+- **Frontend.** Factor Research Lab page with parameter tuner + IC time series +
+  quintile chart + decay curve. Type-safe API contracts.
+- **Test coverage.** ~150 tests including PIT-leakage regression, IC math, quintile
+  bucketing, walk-forward windowing.
 
-### What's a demo, not a tool
+### What's still a demo, not a tool
 
-- **Universe is 10 stocks.** Statistical conclusions on 10 names over 3 years are noise.
-  Real factor strategies need 200-500+ names.
-- **All backtests are in-sample.** No walk-forward, no out-of-sample, no overfit detection.
-- **Synthetic data only** in this sandbox. The real AKShare path is implemented but
-  unvalidated against actual prices.
-- **No paper trading.** No way to know what backtests well actually executes well next bar.
-- **No portfolio risk management.** Equal-weight 10 names with no beta neutralization,
-  no sector caps, no vol targeting at the portfolio level.
+- **Only 1 factor implemented end-to-end** (Northbound Momentum, Sprint 1). Sprint 2
+  is in progress adding NB acceleration, earnings quality, momentum-skip, valuation
+  composite — 4 more factors.
+- **No composite scoring or portfolio backtest yet.** Sprint 3 wires the top-N ranker
+  strategy to the existing engine.
+- **Synthetic data only** in this sandbox. Real AKShare path validated end-to-end
+  on owner's Mac is still Sprint 5.
+- **No walk-forward weight optimization yet** — Sprint 3.
 
 ### What's missing entirely
 
-- **Survivorship bias correction** (point-in-time index membership).
-- **Transaction cost realism beyond commission/tax** — no bid-ask spread, no market impact.
-- **Factor attribution.** Returns aren't decomposed against known factors.
-- **Regime tagging.** No per-regime performance breakdown.
-- **Options support.** Despite the owner being an active options trader, this is nowhere
-  in the platform. The single biggest unleveraged edge.
-- **Alternative data.** Not necessarily a gap — most alt data is negative-EV for retail.
-- **Live execution path.** Manual broker entry remains the path until trust is built.
+- **Paper trading + drift monitoring** (Sprint 6).
+- **Portfolio risk layer** (vol targeting, sector caps, drawdown breakers) — Sprint 7.
+- **Options support** — Sprint 7+. The single biggest unleveraged edge.
+- **Live execution path.** Manual broker entry remains the model until 6+ months
+  clean paper trading.
 
 ### One-line summary
 
-**Better skeleton than 95% of college quant projects; less validated than a single junior
-quant intern's first month at any real shop.** The platform is well-built — but well-built
-demos are common, well-validated edges are rare.
+**Factor research foundation is in place; depth on individual factors and a working
+composite portfolio are next.** Five well-evaluated factors with documented IC > 0.03
+OOS will beat twelve half-evaluated ones by July 2026.
+
+### Empirical finding worth noting — A-share momentum inversion
+
+First real-data evaluation (CSI 300, 2022-01-01 to 2025-12-31, weekly rebalance,
+horizon=20) for `momentum_skip` (20-day return, skipping the most recent 5 days):
+
+| Metric | Result | Read |
+|---|---|---|
+| IC mean | −0.0197 | Predictive power is *negative* |
+| IC t-stat | −2.34 | Statistically significant |
+| Quintile monotonicity | −0.6 | Top-by-score quintile UNDERPERFORMED bottom |
+| Long-short total return | −70.74% (4yr) | Buying past winners actively lost money |
+
+This is **not a bug** — it's the price-momentum inversion in A-shares that
+Liu/Stambaugh/Yuan 2019 §5 documents: retail extrapolation creates short-term
+mean reversion strong enough to overwhelm the US-style momentum effect on
+CSI 300 names over the 20-day-ahead horizon.
+
+**Implication for the composite**: signed-IC weighting is mandatory.
+`SignedICWeightedComposite` (in `astrategy/composites/ic_weighted.py`)
+weights factors by their trailing signed IC, so a consistently-negative-IC
+factor automatically gets a negative weight — turning it into a short
+signal in the composite with no code change. Avoid the temptation to flip
+the factor implementation; let the composite carry the sign so each
+factor stays academically faithful to its name.
 
 ---
 
@@ -266,45 +293,51 @@ Things to NOT build / NOT pursue:
 
 ## 6. Platform gaps that move toward money
 
-In rough priority order. These map to Phases 5-10 in `CLAUDE.md`.
+In rough priority order. These map to Sprints in `CLAUDE.md` §8.
 
-### Phase 5 (CRITICAL — blocks everything else): real data + universe + walk-forward
+### Sprint 2 (in progress): expand the factor library
 
-- Real AKShare path validated on owner's Mac (sandbox can't).
-- 5+ years of daily OHLCV for 300-500 stocks.
-- **Point-in-time index membership.** Without this, every backtest is biased toward
-  current winners. This single fix can flip a "12% annualized" strategy to "4% loser."
-- Walk-forward as a first-class engine feature (12mo train / 3mo test, rolling).
-- IS vs OOS reporting on every backtest. Auto-flag overfit candidates.
-- Factor attribution (regress strategy returns against value/momentum/size/vol/beta-300).
+- Factors 1.2 (NB acceleration), 2.1 (earnings quality), 2.4 (valuation composite),
+  3.2 (momentum-skip) per CLAUDE.md §12's 90-day plan.
+- Each fully evaluated: IC time series + quintile + decay + correlation matrix
+  preview.
 
-### Phase 6: grid search + Bayesian optimization (with overfit guards)
+### Sprint 3: composite + top-N portfolio + walk-forward optimizer
 
-- Sweep param spaces; display IS + OOS heatmaps side-by-side.
-- Penalize parameter count; reject candidates failing OOS Sharpe threshold.
-- Bayesian search via Optuna for high-dim spaces.
-- **Critical:** no "best params" without OOS validation.
+- Equal-weight rank composite as a baseline.
+- IC-weighted composite (rolling 60-day IC weights).
+- `TopNRankerStrategy` wired to the existing constraint-correct engine.
+- Optuna walk-forward weight optimization with regularization toward equal
+  weights and a complexity penalty. No "best params" without OOS validation.
 
-### Phase 7: paper trading + monitoring
+### Sprint 4: frontend Views 2-5
 
-- Daily live mode: fetch today's close, generate tomorrow's orders.
-- User submits orders manually until 6+ months of clean drift-free results.
+- Factor correlation dashboard.
+- Portfolio backtest results page (re-add).
+- Live screener: top-N ranking + per-factor sub-scores.
+- Factor discovery sandbox (custom formula).
+
+### Sprint 5: real-data validation + universe scale-up
+
+- Real AKShare path validated end-to-end on owner's Mac (sandbox can't).
+- Prime CSI 300 → 500 → 1000.
+- Document IC per factor on real data in this file.
+
+### Sprint 6: paper trading + drift monitoring
+
+- Daily live mode: fetch today's close, generate tomorrow's orders. Manual submit.
+- 6+ months clean drift-free before any real money.
 - Drift detector: live Sharpe vs backtest expectation; pause on > 1.0 deviation.
 
-### Phase 8: portfolio risk
+### Sprint 7: portfolio risk + options
 
 - Vol targeting (default 12% annualized).
 - Sector caps (max 25% any SW L1), single-name caps (max 8%).
 - Drawdown circuit breakers.
-- Optional 沪深300 ETF / index futures beta hedge.
+- IV surface + IV rank/percentile + covered calls / cash-secured puts /
+  defined-risk verticals on liquid ETF options (50ETF, 300ETF).
 
-### Phase 9: options (latent edge)
-
-- IV surface ingestion + IV rank/percentile.
-- Templates: covered calls, cash-secured puts, defined-risk verticals.
-- Pin-risk / early-assignment for American-style.
-
-### Phase 10: live execution
+### Beyond: live execution
 
 - Only after 6+ months clean paper. Likely via 同花顺 / 通达信 / broker API.
 - Semi-automatic — platform generates, user reviews and submits.

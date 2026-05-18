@@ -160,3 +160,43 @@ def test_list_walk_forward_runs_empty(client):
     r = client.get("/api/backtest/walk_forward")
     assert r.status_code == 200
     assert r.json() == []
+
+
+def test_correlation_endpoint(client):
+    r = client.get(
+        "/api/factors/correlation",
+        params={
+            "factors": "momentum_skip,northbound_momentum,northbound_acceleration",
+            "start": "2023-06-01",
+            "end": "2024-06-30",
+            "universe": "000300",
+            "rebalance": "monthly",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["factors"] == ["momentum_skip", "northbound_momentum", "northbound_acceleration"]
+    assert len(body["matrix"]) == 3
+    for row in body["matrix"]:
+        assert len(row) == 3
+    # Diagonals are 1.0
+    for i in range(3):
+        assert body["matrix"][i][i] == pytest.approx(1.0)
+    # Symmetric
+    for i in range(3):
+        for j in range(3):
+            assert body["matrix"][i][j] == pytest.approx(body["matrix"][j][i], abs=1e-9)
+
+
+def test_correlation_rejects_lt_2_factors(client):
+    r = client.get("/api/factors/correlation",
+                   params={"factors": "momentum_skip"})
+    assert r.status_code == 400
+    assert "at least 2" in r.json()["detail"]
+
+
+def test_correlation_rejects_unknown_factor(client):
+    r = client.get("/api/factors/correlation",
+                   params={"factors": "momentum_skip,does_not_exist"})
+    assert r.status_code == 400
+    assert "unknown" in r.json()["detail"]

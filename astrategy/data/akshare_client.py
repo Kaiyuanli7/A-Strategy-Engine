@@ -16,6 +16,21 @@ class AKShareError(RuntimeError):
     """Raised when AKShare returns invalid/empty data or all fallbacks fail."""
 
 
+def _sina_symbol(code: str) -> str:
+    """
+    Some AKShare endpoints (sina/tencent) require an `sh`/`sz`/`bj` prefix
+    on the 6-digit stock code. Returns e.g. 'sh600519', 'sz000001', 'bj430047'.
+    """
+    code = code.zfill(6)
+    if code.startswith(("60", "68", "9")):
+        return "sh" + code
+    if code.startswith(("00", "30", "20")):
+        return "sz" + code
+    if code.startswith(("8", "4", "92")):
+        return "bj" + code
+    return "sh" + code  # default fallback
+
+
 _OHLCV_RENAME = {
     "日期": "date",
     "开盘": "open",
@@ -38,7 +53,12 @@ class AKShareClient:
     for index constituents (AKShare APIs drift across versions).
     """
 
-    def __init__(self, request_sleep: float = 0.7):
+    def __init__(self, request_sleep: float = 1.5):
+        """
+        request_sleep: pause between AKShare calls. Defaults to 1.5s — eastmoney's
+        anti-bot drops mid-stream TCP connections when calls fire too rapidly.
+        Drop to 0.5-0.7 only if you've confirmed your network handles burst load.
+        """
         import akshare as ak
         self._ak = ak
         self._request_sleep = request_sleep
@@ -105,26 +125,31 @@ class AKShareClient:
         """
         Per-stock northbound (Stock Connect) holding history.
 
-        Tries multiple AKShare endpoints because the name has drifted across
-        versions. Returns a tidy DataFrame with: date, holding_shares,
-        holding_value, holding_pct, net_buy_shares, net_buy_value.
+        Tries multiple AKShare endpoints because the name and signature have
+        drifted across versions. Returns a tidy DataFrame with: date,
+        holding_shares, holding_value, holding_pct, net_buy_shares, net_buy_value.
 
-        Empty DataFrame if all endpoints fail; caller is expected to fall back
-        to synthetic data (offline / sandboxed environments).
+        Empty DataFrame if all endpoints fail; caller falls back to synthetic.
         """
-        candidates = [
-            "stock_hsgt_hold_stock_em",
-            "stock_hsgt_individual_em",
-            "stock_individual_fund_flow",
+        # Each tuple is (endpoint_name, callable that returns a DataFrame).
+        # Signatures as of AKShare 1.18:
+        #   stock_hsgt_individual_em(symbol=code) — per-stock history
+        #   stock_individual_fund_flow(stock=code, market='sh'|'sz') — per-stock fund flow
+        market = "sh" if code.startswith(("60", "68", "9")) else "sz"
+        attempts = [
+            ("stock_hsgt_individual_em",
+                lambda: self._ak.stock_hsgt_individual_em(symbol=code)),
+            ("stock_individual_fund_flow",
+                lambda: self._ak.stock_individual_fund_flow(stock=code, market=market)),
         ]
         last_err: Exception | None = None
-        for fn_name in candidates:
+        for fn_name, call in attempts:
             fn = getattr(self._ak, fn_name, None)
             if fn is None:
                 continue
             try:
                 self._sleep()
-                df = self._call_with_retry(fn, symbol=code)
+                df = self._call_with_retry(call)
                 norm = self._normalize_northbound(df, start, end)
                 if not norm.empty:
                     log.info("northbound for %s via %s (%d rows)", code, fn_name, len(norm))
@@ -166,10 +191,24 @@ class AKShareClient:
 
     def get_margin_detail(self, code: str, start: str, end: str) -> pd.DataFrame:
         """
-        Per-stock margin (融资融券) detail. Picks SH or SZ endpoint by code
-        prefix. Returns tidy DataFrame: date, financing_balance, short_balance,
+        Per-stock margin (融资融券) detail for a single trading day.
+
+        IMPORTANT: AKShare's SSE / SZSE margin endpoints return ALL stocks for
+        ONE date, not one stock for a date range. To build a per-stock history
+        you need to call this once per trading day in the desired range and
+        filter to `code` each time. The current Sprint-2 factor library
+        doesn't use margin data — Factor 1.3 (Margin Sentiment Divergence)
+        lands in Sprint 2+, and the loader will be refactored then to do
+        date-driven priming instead of per-stock.
+
+        For now this returns a single-day snapshot from `start` so the smoke
+        script can validate connectivity. Walk back up to 14 days looking
+        for a date that actually has data (non-trading days return empty).
+
+        Returns tidy DataFrame: date, financing_balance, short_balance,
         financing_buy_amount, financing_repay_amount, net_financing_change.
         """
+        from datetime import datetime as _dt, timedelta as _td
         if code.startswith(("60", "68")):
             fn_name = "stock_margin_detail_sse"
         elif code.startswith(("00", "30")):
@@ -181,13 +220,25 @@ class AKShareClient:
         if fn is None:
             log.warning("margin: AKShare missing %s", fn_name)
             return pd.DataFrame()
-        try:
-            self._sleep()
-            df = self._call_with_retry(fn, date=start.replace("-", ""))
-        except Exception as e:
-            log.warning("margin endpoint %s failed: %s", fn_name, e)
-            return pd.DataFrame()
-        return self._normalize_margin(df, code, start, end)
+
+        # Walk back up to 14 calendar days from `start` looking for a working
+        # trading day. SSE/SZSE return empty / malformed dataframes on holidays.
+        cur = _dt.strptime(start, "%Y-%m-%d").date()
+        for _ in range(14):
+            cur_str = cur.strftime("%Y%m%d")
+            try:
+                self._sleep()
+                raw = fn(date=cur_str)
+                norm = self._normalize_margin(raw, code,
+                                              cur.strftime("%Y-%m-%d"),
+                                              cur.strftime("%Y-%m-%d"))
+                if not norm.empty:
+                    return norm
+            except Exception as e:
+                log.debug("margin %s @ %s: %s", fn_name, cur_str, e)
+            cur -= _td(days=1)
+        log.warning("margin: no trading day with data in 14 days back from %s", start)
+        return pd.DataFrame()
 
     @staticmethod
     def _normalize_margin(df: pd.DataFrame, code: str, start: str, end: str) -> pd.DataFrame:
@@ -225,28 +276,31 @@ class AKShareClient:
 
         Returns tidy DataFrame: code, date, seq, seat_name, seat_type,
         buy_amount, sell_amount, net_amount.
+
+        Signature notes (AKShare 1.18):
+        - stock_lhb_detail_em(start_date=, end_date=) — accepts a date range.
+        - stock_lhb_jgstatistic_em(symbol='近一月'|'近三月'|...) — period only,
+          no date range. Not used as a daily-disclosure fallback.
         """
-        candidates = ["stock_lhb_detail_em", "stock_lhb_jgstatistic_em"]
-        for fn_name in candidates:
-            fn = getattr(self._ak, fn_name, None)
-            if fn is None:
-                continue
-            try:
-                self._sleep()
-                df = self._call_with_retry(
-                    fn,
+        fn = getattr(self._ak, "stock_lhb_detail_em", None)
+        if fn is None:
+            log.warning("lhb: AKShare missing stock_lhb_detail_em")
+            return pd.DataFrame()
+        try:
+            self._sleep()
+            df = self._call_with_retry(
+                lambda: fn(
                     start_date=date.replace("-", ""),
                     end_date=date.replace("-", ""),
                 )
-                norm = self._normalize_lhb(df)
-                if not norm.empty:
-                    return norm
-            except Exception as e:
-                log.warning("lhb %s failed for %s: %s", fn_name, date, e)
-        return pd.DataFrame(columns=[
-            "code", "date", "seq", "seat_name", "seat_type",
-            "buy_amount", "sell_amount", "net_amount",
-        ])
+            )
+            return self._normalize_lhb(df)
+        except Exception as e:
+            log.warning("lhb stock_lhb_detail_em failed for %s: %s", date, e)
+            return pd.DataFrame(columns=[
+                "code", "date", "seq", "seat_name", "seat_type",
+                "buy_amount", "sell_amount", "net_amount",
+            ])
 
     @staticmethod
     def _normalize_lhb(df: pd.DataFrame) -> pd.DataFrame:
@@ -356,6 +410,120 @@ class AKShareClient:
                 df[c] = pd.NA
         return df[["report_date", "rating", "target_price", "eps_estimate", "revenue_estimate"]].copy()
 
+    def get_quarterly_fundamentals(self, code: str) -> pd.DataFrame:
+        """
+        Quarterly fundamentals via AKShare's `stock_financial_abstract`.
+
+        AKShare returns indicator-wide format:
+            选项 | 指标         | 20260331 | 20251231 | 20250930 | ...
+            --- | ------------ | -------- | -------- | -------- | ---
+            盈利能力 | 净资产收益率 | 15.2    | 14.8    | 14.5    | ...
+
+        We pivot to long format (one row per (code, report_date)) and rename
+        a curated subset of indicators to our schema columns. announce_date
+        is estimated as report_date + 45 days (AKShare doesn't surface the
+        actual announce date per stock; 45 days is a conservative buffer).
+
+        Returns columns:
+            report_date, announce_date, roe_ttm, eps_ttm,
+            operating_cash_flow_ttm, net_income_ttm, revenue_yoy, net_profit_yoy.
+        PE/PB/PS columns are NOT populated (the endpoint doesn't expose them);
+        upsert_fundamentals tolerates missing values.
+
+        Returns empty DataFrame if the fetch fails or the response is unrecognized.
+        """
+        try:
+            self._sleep()
+            df = self._call_with_retry(self._ak.stock_financial_abstract, symbol=code)
+        except Exception as e:
+            log.warning("fundamentals fetch failed for %s: %s", code, e)
+            return pd.DataFrame()
+        return self._normalize_quarterly_fundamentals(df)
+
+    # Map of Chinese 指标 → our schema column. We accept multiple aliases
+    # for ROE since some AKShare versions use "(摊薄)" while others use
+    # "(加权)" or have no suffix at all.
+    _FUNDAMENTALS_INDICATOR_MAP: dict[str, str] = {
+        "净资产收益率": "roe_ttm",
+        "净资产收益率(摊薄)": "roe_ttm",
+        "净资产收益率(加权)": "roe_ttm",
+        "净资产收益率-摊薄": "roe_ttm",
+        "净资产收益率-加权": "roe_ttm",
+        "摊薄每股收益": "eps_ttm",
+        "基本每股收益": "eps_ttm",
+        "每股收益": "eps_ttm",
+        "经营活动产生的现金流量净额": "operating_cash_flow_ttm",
+        "经营现金流量净额": "operating_cash_flow_ttm",
+        "归属于母公司股东的净利润": "net_income_ttm",
+        "归属母公司股东净利润": "net_income_ttm",
+        "净利润": "net_income_ttm",
+        "营业总收入同比增长": "revenue_yoy",
+        "营业收入同比增长率": "revenue_yoy",
+        "营业总收入同比增长率": "revenue_yoy",
+        "归属于母公司股东的净利润同比增长": "net_profit_yoy",
+        "归属母公司股东的净利润同比": "net_profit_yoy",
+        "净利润同比增长率": "net_profit_yoy",
+        # Per-share book value + sales — used to derive daily PE / PB / PS.
+        "每股净资产": "book_value_per_share",
+        "每股净资产(摊薄)": "book_value_per_share",
+        "每股净资产-摊薄": "book_value_per_share",
+        "每股营业总收入": "revenue_per_share",
+        "每股营业收入": "revenue_per_share",
+    }
+
+    @classmethod
+    def _normalize_quarterly_fundamentals(cls, df: pd.DataFrame) -> pd.DataFrame:
+        """Pivot AKShare's indicator-wide format to one row per quarter."""
+        if df is None or df.empty:
+            return pd.DataFrame()
+        if "指标" not in df.columns:
+            log.warning("fundamentals: unrecognized response shape; columns=%s",
+                        list(df.columns)[:8])
+            return pd.DataFrame()
+        # Date columns are anything matching YYYYMMDD (8 digits).
+        date_cols = [c for c in df.columns
+                     if isinstance(c, str) and len(c) == 8 and c.isdigit()]
+        if not date_cols:
+            log.warning("fundamentals: no YYYYMMDD date columns in response")
+            return pd.DataFrame()
+
+        # Aggregate by indicator: keep the FIRST row per indicator that
+        # matches our schema (the endpoint sometimes ships duplicate indicator
+        # names across 选项 categories).
+        wanted = cls._FUNDAMENTALS_INDICATOR_MAP
+        per_indicator: dict[str, pd.Series] = {}
+        for _, row in df.iterrows():
+            ind = str(row["指标"]).strip()
+            schema_col = wanted.get(ind)
+            if schema_col is None or schema_col in per_indicator:
+                continue
+            per_indicator[schema_col] = row[date_cols]
+
+        if not per_indicator:
+            return pd.DataFrame()
+
+        # Pivot: rows = report dates (parsed from YYYYMMDD), cols = our schema
+        wide = pd.DataFrame(per_indicator)
+        wide.index = pd.to_datetime(wide.index, format="%Y%m%d", errors="coerce")
+        wide = wide[wide.index.notna()].sort_index()
+        wide.index.name = "report_date"
+        out = wide.reset_index()
+        out["report_date"] = out["report_date"].dt.strftime("%Y-%m-%d")
+        out["announce_date"] = (
+            pd.to_datetime(out["report_date"]) + pd.Timedelta(days=45)
+        ).dt.strftime("%Y-%m-%d")
+        # Ensure all schema cols exist even if missing in this stock's response
+        for col in ("roe_ttm", "eps_ttm", "operating_cash_flow_ttm",
+                    "net_income_ttm", "revenue_yoy", "net_profit_yoy",
+                    "book_value_per_share", "revenue_per_share"):
+            if col not in out.columns:
+                out[col] = pd.NA
+        keep = ["report_date", "announce_date", "roe_ttm", "eps_ttm",
+                "operating_cash_flow_ttm", "net_income_ttm",
+                "revenue_yoy", "net_profit_yoy",
+                "book_value_per_share", "revenue_per_share"]
+        return out[keep].reset_index(drop=True)
+
     def get_daily_ohlcv(
         self,
         code: str,
@@ -365,25 +533,68 @@ class AKShareClient:
     ) -> pd.DataFrame:
         """
         Daily OHLCV for a single stock, forward-adjusted by default.
-        start/end accept YYYY-MM-DD or YYYYMMDD.
-        Returns columns: date (str YYYY-MM-DD), open, high, low, close, volume, amount, pct_change, turnover.
+
+        Tries multiple AKShare endpoints in order because eastmoney's anti-bot
+        sometimes drops the TCP mid-stream (RemoteDisconnected). Order is:
+        1. `stock_zh_a_hist` — eastmoney (richest columns)
+        2. `stock_zh_a_hist_tx` — Tencent (works when eastmoney 403s)
+        3. `stock_zh_a_daily` — sina (last resort; needs sh/sz/bj prefix)
+
+        Returns columns: date (str YYYY-MM-DD), open, high, low, close, volume,
+        amount, pct_change, turnover. Some columns may be missing on
+        non-primary endpoints; downstream code uses .get(col) so this is fine.
         """
         start_compact = start.replace("-", "")
         end_compact = end.replace("-", "")
+        last_err: Exception | None = None
 
-        self._sleep()
-        df = self._call_with_retry(
-            self._ak.stock_zh_a_hist,
-            symbol=code,
-            period="daily",
-            start_date=start_compact,
-            end_date=end_compact,
-            adjust=adjust,
-        )
+        attempts: list[tuple[str, callable]] = [
+            ("stock_zh_a_hist", lambda: self._ak.stock_zh_a_hist(
+                symbol=code, period="daily",
+                start_date=start_compact, end_date=end_compact, adjust=adjust,
+            )),
+            ("stock_zh_a_hist_tx", lambda: self._ak.stock_zh_a_hist_tx(
+                symbol=_sina_symbol(code),
+                start_date=start_compact, end_date=end_compact, adjust=adjust,
+            )),
+            ("stock_zh_a_daily", lambda: self._ak.stock_zh_a_daily(
+                symbol=_sina_symbol(code),
+                start_date=start_compact, end_date=end_compact, adjust=adjust,
+            )),
+        ]
 
-        df = df.rename(columns=_OHLCV_RENAME)
-        df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+        for name, call in attempts:
+            fn = getattr(self._ak, name, None)
+            if fn is None:
+                continue
+            try:
+                self._sleep()
+                df = self._call_with_retry(call)
+                # Sina returns date as the index; reset it before renaming.
+                if "date" not in df.columns and df.index.name in ("date", None):
+                    df = df.reset_index().rename(columns={df.index.name or "index": "date"})
+                df = df.rename(columns=_OHLCV_RENAME)
+                df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
 
-        keep = ["date", "open", "high", "low", "close", "volume", "amount", "pct_change", "turnover"]
-        df = df[[c for c in keep if c in df.columns]].copy()
-        return df.drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
+                # Different endpoints return different columns:
+                #   eastmoney: open, high, low, close, volume, amount, pct_change, turnover
+                #   tencent:   open, high, low, close, amount        (NO volume)
+                #   sina:      open, high, low, close, volume, amount, turnover
+                # When volume is missing but amount + close are present, derive
+                # volume ≈ amount / close. Rough (real VWAP ≠ close) but good
+                # enough to keep downstream suspension detection from firing
+                # on every cell.
+                if "volume" not in df.columns and "amount" in df.columns and "close" in df.columns:
+                    df["volume"] = (df["amount"].astype(float)
+                                    / df["close"].astype(float).where(df["close"] > 0, other=pd.NA))
+                if "amount" not in df.columns and "volume" in df.columns and "close" in df.columns:
+                    df["amount"] = df["volume"].astype(float) * df["close"].astype(float)
+
+                keep = ["date", "open", "high", "low", "close", "volume",
+                        "amount", "pct_change", "turnover"]
+                df = df[[c for c in keep if c in df.columns]].copy()
+                return df.drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
+            except Exception as e:
+                log.warning("OHLCV via %s failed for %s: %s", name, code, e)
+                last_err = e
+        raise AKShareError(f"all OHLCV endpoints failed for {code}; last error: {last_err}")

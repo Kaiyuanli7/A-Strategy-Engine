@@ -262,13 +262,24 @@ class RunStorage:
         for r in rows:
             cfg = json.loads(r["config_json"])
             res = json.loads(r["result_json"]) if r["result_json"] else None
-            strategy_type = cfg.get("request", {}).get("strategy", {}).get("type", "?")
+            # New Sprint-3.5 shape: factors at top-level; aggregate dict;
+            # legacy shape: strategy under "request"
+            factors = cfg.get("factors") or [
+                f[0] if isinstance(f, list) else f
+                for f in cfg.get("factors", [])
+            ]
+            factor_names = [f[0] if isinstance(f, list) else f for f in factors] if factors else []
+            strategy_type = ",".join(factor_names) if factor_names else (
+                cfg.get("request", {}).get("strategy", {}).get("type", "?")
+            )
+            agg = (res or {}).get("aggregate") or res or {}
             items.append({
                 "run_id": r["id"],
                 "status": r["status"],
                 "strategy_type": strategy_type,
-                "aggregate_oos_sharpe": (res or {}).get("aggregate_oos_sharpe"),
-                "overfit_flag": (res or {}).get("overfit_flag"),
+                "aggregate_oos_sharpe": agg.get("oos_sharpe") or agg.get("aggregate_oos_sharpe"),
+                "overfit_flag": agg.get("overfit") if agg.get("overfit") is not None
+                                else agg.get("overfit_flag"),
                 "n_windows": len((res or {}).get("windows", [])) if res else None,
                 "created_at": r["created_at"],
             })
