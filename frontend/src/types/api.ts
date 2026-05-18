@@ -120,3 +120,104 @@ export interface Health {
   cached_stocks: number
   cached_runs: number
 }
+
+// --- Phase 4: composable strategy spec --------------------------------------
+
+export type ConditionType =
+  | 'ma_cross' | 'price_vs_ma' | 'rsi' | 'bollinger_breakout' | 'macd'
+  | 'volume_spike' | 'pe_bound' | 'pb_bound' | 'ps_bound' | 'roe_bound'
+  | 'revenue_growth' | 'nb_net_inflow' | 'nb_holding_pct'
+
+export interface ConditionSpecBase {
+  type: ConditionType
+}
+export interface MACrossCond extends ConditionSpecBase {
+  type: 'ma_cross'
+  fast: number
+  slow: number
+  direction: 'up' | 'down'
+}
+export interface PriceVsMACond extends ConditionSpecBase {
+  type: 'price_vs_ma'
+  period: number
+  op: '>' | '<'
+}
+export interface RSICond extends ConditionSpecBase {
+  type: 'rsi'
+  period: number
+  threshold: number
+  direction: 'above' | 'below' | 'cross_up' | 'cross_down'
+}
+export interface BollingerBreakoutCond extends ConditionSpecBase {
+  type: 'bollinger_breakout'
+  period: number
+  k: number
+  band: 'upper' | 'lower'
+}
+export interface MACDCond extends ConditionSpecBase {
+  type: 'macd'
+  fast: number
+  slow: number
+  signal: number
+  event: 'hist_cross_up' | 'hist_cross_down' | 'macd_above_signal' | 'macd_below_signal'
+}
+export interface VolumeSpikeCond extends ConditionSpecBase {
+  type: 'volume_spike'
+  period: number
+  multiple: number
+}
+export interface BoundCond extends ConditionSpecBase {
+  type: 'pe_bound' | 'pb_bound' | 'ps_bound' | 'roe_bound' | 'revenue_growth' | 'nb_holding_pct'
+  min: number | null
+  max: number | null
+}
+export interface NorthboundNetInflowCond extends ConditionSpecBase {
+  type: 'nb_net_inflow'
+  window: number
+  min_value: number
+}
+
+export type ConditionSpec =
+  | MACrossCond | PriceVsMACond | RSICond | BollingerBreakoutCond | MACDCond
+  | VolumeSpikeCond | BoundCond | NorthboundNetInflowCond
+
+export interface ExitRulesSpec {
+  stop_loss_pct: number | null
+  take_profit_pct: number | null
+  max_hold_days: number | null
+  signal_reversal: boolean
+}
+
+export interface SizingSpec {
+  method: 'equal_weight' | 'fixed_amount' | 'vol_adjusted'
+  position_size_pct: number
+  amount?: number | null
+  target_vol_pct?: number | null
+}
+
+export interface UniverseFilter {
+  boards: string[] | null
+  exclude_st: boolean
+  market_cap_min: number | null
+  market_cap_max: number | null
+  sectors_l1: string[] | null
+}
+
+export interface ComposableStrategyParams {
+  entry_conditions: ConditionSpec[]
+  exit_rules: ExitRulesSpec
+  sizing: SizingSpec
+  max_positions: number
+}
+
+export interface ConditionTypeMeta {
+  type: ConditionType
+  label: string
+  params: Record<string, unknown>
+}
+
+export interface ScreenerPreview {
+  filtered_codes: string[]
+  count: number
+  total: number
+}

@@ -77,6 +77,7 @@ class Backtester:
         self.fills: list[Fill] = []
         self.rejections: list[Fill] = []
         self.rng = random.Random(config.random_seed)
+        self._ctx: StrategyContext | None = None
 
     def run(self) -> BacktestResult:
         if not self.data:
@@ -92,6 +93,7 @@ class Backtester:
             universe=list(self.data.keys()),
             data=self.data,
         )
+        self._ctx = ctx
         self.strategy.initialize(ctx)
 
         equity_by_date: dict[pd.Timestamp, float] = {}
@@ -199,7 +201,7 @@ class Backtester:
             self._reject(order, date, open_price, "apply_buy_failed")
             return
 
-        self.fills.append(Fill(
+        self._record_fill(Fill(
             code=order.code,
             side=OrderSide.BUY,
             shares=shares,
@@ -234,7 +236,7 @@ class Backtester:
             self._reject(order, date, open_price, "apply_sell_failed")
             return
 
-        self.fills.append(Fill(
+        self._record_fill(Fill(
             code=order.code,
             side=OrderSide.SELL,
             shares=shares,
@@ -242,6 +244,14 @@ class Backtester:
             cost=cost,
             timestamp=date,
         ))
+
+    def _record_fill(self, fill: Fill) -> None:
+        self.fills.append(fill)
+        if self._ctx is not None:
+            try:
+                self.strategy.on_fill(fill, self._ctx)
+            except Exception as e:  # noqa: BLE001
+                log.warning("strategy.on_fill raised: %s", e)
 
     def _reject(self, order: Order, date: pd.Timestamp, price: float, reason: str) -> None:
         self.rejections.append(Fill(

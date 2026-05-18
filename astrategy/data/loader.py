@@ -84,3 +84,49 @@ class DataLoader:
 
     def load_meta(self, codes: list[str]) -> dict[str, dict]:
         return {c: self.cache.get_stock_meta(c) for c in codes if self.cache.get_stock_meta(c)}
+
+    def prime_extras_synthetic(
+        self,
+        codes: list[str],
+        start: str,
+        end: str,
+    ) -> dict[str, dict[str, int]]:
+        """
+        Populate fundamentals + valuation + sector + northbound with synthetic
+        data. Used in sandboxed envs where AKShare is unreachable.
+
+        Returns {code: {table_name: row_count}} for verification.
+        """
+        from astrategy.data.synthetic import (
+            generate_synthetic_fundamentals,
+            generate_synthetic_northbound,
+            generate_synthetic_sector,
+            generate_synthetic_valuation_daily,
+        )
+        results: dict[str, dict[str, int]] = {}
+        for code in codes:
+            ohlcv = self.cache.get_daily_bars(code, start, end)
+            ohlcv_for_val = (
+                ohlcv.assign(date=ohlcv["date"].astype(str)) if not ohlcv.empty else None
+            )
+
+            f = generate_synthetic_fundamentals(code, start, end)
+            v = generate_synthetic_valuation_daily(code, start, end, ohlcv_for_val)
+            n = generate_synthetic_northbound(code, start, end)
+            sec = generate_synthetic_sector(code)
+
+            self.cache.upsert_fundamentals(code, f)
+            self.cache.upsert_valuation_daily(code, v)
+            self.cache.upsert_northbound(code, n)
+            self.cache.upsert_sector(
+                code,
+                sw_l1_name=sec["sw_l1_name"],
+                sw_l1_code=sec.get("sw_l1_code"),
+            )
+            results[code] = {
+                "fundamentals": len(f),
+                "valuation_daily": len(v),
+                "northbound_daily": len(n),
+                "sector": 1,
+            }
+        return results

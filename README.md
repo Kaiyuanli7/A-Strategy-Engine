@@ -7,7 +7,8 @@ A-share (Chinese stock market / 沪深A股) trading strategy research platform.
 - **Phase 1**: data layer + core backtest engine with A-share constraints — ✅ shipped
 - **Phase 2**: FastAPI REST server wrapping the engine — ✅ shipped
 - **Phase 3**: React + Tailwind frontend (runs list, results dashboard, screener) — ✅ shipped
-- **Phase 4+**: strategy builder, optimizers (grid / Bayesian / walk-forward / genetic) — deferred
+- **Phase 4**: composable strategies (technical + fundamental + flow conditions) + visual builder — ✅ shipped
+- **Phase 5+**: optimizers (grid / Bayesian / walk-forward / genetic) — deferred
 
 ## Quickstart
 

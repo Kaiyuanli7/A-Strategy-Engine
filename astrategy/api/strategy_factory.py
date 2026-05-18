@@ -5,11 +5,13 @@ from __future__ import annotations
 from typing import Callable
 
 from astrategy.strategies.base import Strategy
+from astrategy.strategies.composable import ComposableStrategy
 from astrategy.strategies.ma_cross import DualMACrossStrategy
 
 
 _REGISTRY: dict[str, Callable[..., Strategy]] = {
     "ma_cross": DualMACrossStrategy,
+    "composable": ComposableStrategy,
 }
 
 

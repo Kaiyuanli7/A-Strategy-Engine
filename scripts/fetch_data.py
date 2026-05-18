@@ -40,6 +40,17 @@ def _prime_synthetic(start: str, end: str) -> dict[str, int]:
         print(f"  synth  {code} {name}  {n} rows")
 
     cache.upsert_index_constituents("DEMO", [c for c, _ in DEMO_UNIVERSE], snapshot)
+
+    # Also prime fundamentals / valuation / sector / northbound (Phase 4 deps)
+    from astrategy.data.loader import DataLoader
+    loader = DataLoader(cache=cache)
+    extras = loader.prime_extras_synthetic(
+        [c for c, _ in DEMO_UNIVERSE], start, end,
+    )
+    if extras:
+        sample = next(iter(extras.values()))
+        print(f"  extras per stock: {sample}")
+
     return results
 
 

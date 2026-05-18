@@ -26,6 +26,14 @@ export default function Layout() {
               Runs
             </NavLink>
             <NavLink
+              to="/builder"
+              className={({ isActive }) =>
+                'nav-link' + (isActive ? ' nav-link-active' : '')
+              }
+            >
+              Builder
+            </NavLink>
+            <NavLink
               to="/screener"
               className={({ isActive }) =>
                 'nav-link' + (isActive ? ' nav-link-active' : '')

@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import Layout from '@/components/Layout'
+import Builder from '@/pages/Builder'
 import Dashboard from '@/pages/Dashboard'
 import RunsList from '@/pages/RunsList'
 import Screener from '@/pages/Screener'
@@ -9,6 +10,7 @@ export default function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<RunsList />} />
+        <Route path="builder" element={<Builder />} />
         <Route path="runs/:runId" element={<Dashboard />} />
         <Route path="screener" element={<Screener />} />
         <Route path="*" element={<Navigate to="/" replace />} />

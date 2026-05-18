@@ -82,6 +82,40 @@ def list_strategies() -> dict:
     return {"types": registered_types()}
 
 
+@app.get("/api/strategies/condition-types", tags=["meta"])
+def get_condition_types() -> dict:
+    """Schema for each ConditionSpec variant — drives the builder UI."""
+    from astrategy.strategies.conditions import CONDITION_TYPES
+    return {"condition_types": CONDITION_TYPES}
+
+
+@app.get("/api/data/screener/preview", tags=["data"])
+def screener_preview(
+    cache: Annotated[SQLiteCache, Depends(get_cache)],
+    boards: str | None = Query(None, description="Comma-separated board ids"),
+    exclude_st: bool = Query(True),
+    market_cap_min: float | None = None,
+    market_cap_max: float | None = None,
+    sectors_l1: str | None = Query(None, description="Comma-separated SW L1 names"),
+) -> dict:
+    boards_list = [b for b in (boards.split(",") if boards else []) if b]
+    sectors_list = [s for s in (sectors_l1.split(",") if sectors_l1 else []) if s]
+    codes = cache.query_universe(
+        boards=boards_list or None,
+        exclude_st=exclude_st,
+        market_cap_min=market_cap_min,
+        market_cap_max=market_cap_max,
+        sectors_l1=sectors_list or None,
+    )
+    total = len(cache.get_index_constituents("DEMO"))
+    return {"filtered_codes": codes, "count": len(codes), "total": total}
+
+
+@app.get("/api/data/sectors", tags=["data"])
+def list_sectors(cache: Annotated[SQLiteCache, Depends(get_cache)]) -> dict:
+    return {"sectors_l1": cache.distinct_sectors()}
+
+
 # --- Data endpoints -----------------------------------------------------------
 
 @app.get("/api/data/universe", response_model=UniverseResponse, tags=["data"])
@@ -172,22 +206,44 @@ def run_backtest(
     req: BacktestRequest,
     loader: Annotated[DataLoader, Depends(get_loader)],
     storage: Annotated[RunStorage, Depends(get_storage)],
+    cache: Annotated[SQLiteCache, Depends(get_cache)],
 ) -> BacktestRunResponse:
     config_dict = req.model_dump()
     run_id = storage.new_run(config_dict)
 
+    # Apply universe filter (if any) by intersecting with cache.query_universe
+    effective_universe = list(req.universe)
+    if req.universe_filter is not None:
+        uf = req.universe_filter
+        filtered = cache.query_universe(
+            boards=uf.boards,
+            exclude_st=uf.exclude_st,
+            market_cap_min=uf.market_cap_min,
+            market_cap_max=uf.market_cap_max,
+            sectors_l1=uf.sectors_l1,
+            only_codes=req.universe,
+        )
+        effective_universe = filtered
+        if not effective_universe:
+            msg = "universe_filter narrowed the universe to zero stocks"
+            storage.mark_failed(run_id, msg)
+            raise HTTPException(status_code=422, detail=msg)
+
     try:
-        strategy = create_strategy(req.strategy.type, req.strategy.params)
-    except ValueError as e:
+        params = dict(req.strategy.params)
+        if req.strategy.type == "composable":
+            params.setdefault("cache", cache)
+        strategy = create_strategy(req.strategy.type, params)
+    except (ValueError, TypeError) as e:
         storage.mark_failed(run_id, str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
-    data = loader.load_bars(req.universe, req.config.start, req.config.end)
+    data = loader.load_bars(effective_universe, req.config.start, req.config.end)
     if not data:
-        msg = f"no cached data for any of {req.universe} in {req.config.start}..{req.config.end}"
+        msg = f"no cached data for any of {effective_universe} in {req.config.start}..{req.config.end}"
         storage.mark_failed(run_id, msg)
         raise HTTPException(status_code=404, detail=msg)
-    meta = loader.load_meta(req.universe)
+    meta = loader.load_meta(effective_universe)
 
     bt_config = BacktestConfig(
         start=req.config.start,

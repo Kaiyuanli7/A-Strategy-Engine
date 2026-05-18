@@ -3,9 +3,12 @@ import type {
   BacktestResult,
   BacktestRunListItem,
   BacktestRunResponse,
+  ConditionTypeMeta,
   Health,
+  ScreenerPreview,
   StockOHLCV,
   Universe,
+  UniverseFilter,
 } from '@/types/api'
 
 const BASE = '' // vite proxy forwards /api → backend in dev; absolute in prod
@@ -45,4 +48,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  conditionTypes: () =>
+    req<{ condition_types: ConditionTypeMeta[] }>('/api/strategies/condition-types'),
+  sectors: () => req<{ sectors_l1: string[] }>('/api/data/sectors'),
+  screenerPreview: (filter: UniverseFilter) => {
+    const params = new URLSearchParams()
+    if (filter.boards && filter.boards.length > 0) params.set('boards', filter.boards.join(','))
+    if (filter.sectors_l1 && filter.sectors_l1.length > 0) params.set('sectors_l1', filter.sectors_l1.join(','))
+    if (filter.market_cap_min !== null) params.set('market_cap_min', String(filter.market_cap_min))
+    if (filter.market_cap_max !== null) params.set('market_cap_max', String(filter.market_cap_max))
+    params.set('exclude_st', String(filter.exclude_st))
+    return req<ScreenerPreview>(`/api/data/screener/preview?${params.toString()}`)
+  },
 }

@@ -9,8 +9,18 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class StrategySpec(BaseModel):
     """JSON-serializable strategy configuration."""
-    type: Literal["ma_cross"] = Field(..., description="Registered strategy type")
+    type: Literal["ma_cross", "composable"] = Field(..., description="Registered strategy type")
     params: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class UniverseFilter(BaseModel):
+    boards: list[str] | None = None
+    exclude_st: bool = True
+    market_cap_min: float | None = None
+    market_cap_max: float | None = None
+    sectors_l1: list[str] | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -28,6 +38,7 @@ class BacktestConfigSpec(BaseModel):
 class BacktestRequest(BaseModel):
     strategy: StrategySpec
     universe: list[str] = Field(..., min_length=1, description="Stock codes to trade")
+    universe_filter: UniverseFilter | None = None
     config: BacktestConfigSpec = Field(default_factory=BacktestConfigSpec)
 
     model_config = ConfigDict(extra="forbid")
