@@ -1,87 +1,10 @@
 // Mirrors the Pydantic schemas in astrategy/api/schemas.py.
 
-export interface BacktestSummary {
-  n_bars: number
-  initial_equity: number
-  final_equity: number
-  total_return: number
-  annualized_return: number
-  annualized_vol: number
-  sharpe: number
-  max_drawdown: number
-  max_drawdown_peak: string | null
-  max_drawdown_trough: string | null
-  calmar: number
-  win_rate: number
-  avg_hold_days: number
-  n_trips: number
-  n_fills: number
-  n_rejections: number
-  turnover: number
-}
-
-export interface StrategySpec {
-  type: string
-  params: Record<string, unknown>
-}
-
-export interface BacktestConfigSpec {
-  start: string
-  end: string
-  initial_cash: number
-  limit_hit_fill_prob: number
-  random_seed: number
-}
-
-export interface BacktestRequest {
-  strategy: StrategySpec
-  universe: string[]
-  config: BacktestConfigSpec
-}
-
-export interface EquityPoint {
-  date: string
-  equity: number
-}
-
-export interface FillRecord {
-  date: string
-  code: string
-  side: 'buy' | 'sell'
-  shares: number
-  price: number
-  cost: number
-  rejected_reason?: string | null
-}
-
-export interface BacktestResult {
-  run_id: string
-  status: string
-  config: BacktestRequest
-  summary: BacktestSummary | null
-  equity_curve: EquityPoint[]
-  fills: FillRecord[]
-  rejections: FillRecord[]
-  error: string | null
-}
-
-export interface BacktestRunListItem {
-  run_id: string
-  status: string
-  strategy_type: string
-  universe_size: number
-  start: string
-  end: string
-  created_at: string
-  sharpe: number | null
-  total_return: number | null
-}
-
-export interface BacktestRunResponse {
-  run_id: string
-  status: 'completed' | 'failed'
-  summary: BacktestSummary | null
-  error: string | null
+export interface Health {
+  status: 'ok'
+  version: string
+  cached_stocks: number
+  cached_runs: number
 }
 
 export interface StockBar {
@@ -103,8 +26,8 @@ export interface StockOHLCV {
 
 export interface UniverseStock {
   code: string
-  name: string
-  board: string
+  name: string | null
+  board: string | null
   is_st: boolean
 }
 
@@ -114,9 +37,89 @@ export interface Universe {
   stocks: UniverseStock[]
 }
 
-export interface Health {
-  status: 'ok'
-  version: string
-  cached_stocks: number
-  cached_runs: number
+export interface FactorParamSpec {
+  name: string
+  type: 'int' | 'float' | 'str' | 'bool'
+  default: number | string | boolean
+  description: string | null
+  min: number | null
+  max: number | null
+}
+
+export type FactorCategory = 'flow' | 'fundamental' | 'technical' | 'event' | 'sector'
+
+export interface FactorMeta {
+  name: string
+  category: FactorCategory
+  description: string
+  lookback_days: number
+  rebalance_freq: 'daily' | 'weekly' | 'monthly'
+  params: FactorParamSpec[]
+}
+
+export interface ICPoint {
+  date: string
+  ic: number
+}
+
+export interface QuintileCumPoint {
+  date: string
+  q1: number
+  q2: number
+  q3: number
+  q4: number
+  q5: number
+  long_short: number
+}
+
+export interface DecayPoint {
+  horizon: number
+  ic_mean: number
+  ic_ir: number
+}
+
+export interface ICSummary {
+  mean: number
+  std: number
+  ir: number
+  hit_rate: number
+  t_stat: number
+  n: number
+}
+
+export interface QuintileSummary {
+  long_short_mean: number
+  long_short_std: number
+  long_short_sharpe: number
+  long_short_total_return: number
+  monotonicity: number
+  avg_turnover: number
+}
+
+export interface FactorEvaluation {
+  factor: FactorMeta
+  params: Record<string, unknown>
+  universe: string
+  start: string
+  end: string
+  rebalance: 'daily' | 'weekly' | 'monthly'
+  horizon: number
+  n_dates: number
+  n_stocks_avg: number
+  ic_series: ICPoint[]
+  ic_summary: ICSummary
+  quintile_cum: QuintileCumPoint[]
+  quintile_summary: QuintileSummary
+  decay: DecayPoint[]
+  cached: boolean
+}
+
+export interface EvaluateParams {
+  start: string
+  end: string
+  universe: string
+  horizon: number
+  rebalance: 'daily' | 'weekly' | 'monthly'
+  lookback?: number
+  use_cache?: boolean
 }

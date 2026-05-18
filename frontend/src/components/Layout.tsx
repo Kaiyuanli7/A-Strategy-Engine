@@ -23,15 +23,7 @@ export default function Layout() {
                 'nav-link' + (isActive ? ' nav-link-active' : '')
               }
             >
-              Runs
-            </NavLink>
-            <NavLink
-              to="/screener"
-              className={({ isActive }) =>
-                'nav-link' + (isActive ? ' nav-link-active' : '')
-              }
-            >
-              Screener
+              Factor Lab
             </NavLink>
           </nav>
           <div className="ml-auto text-xs text-ink-400 font-mono">

@@ -42,6 +42,53 @@ class BacktestResult:
     summary: dict = field(default_factory=dict)
 
 
+def enrich_summary(
+    result: "BacktestResult",
+    cache,
+    universe: list[str],
+    start: str,
+    end: str,
+    market_index: str = "000300",
+    include_factor: bool = True,
+    include_regime: bool = True,
+) -> None:
+    """
+    Augment result.summary in-place with `factor_loadings` + `regime_metrics`.
+    Best-effort — silently skips if market index or factor data isn't cached.
+    """
+    if result.equity_curve.empty:
+        return
+
+    strategy_returns = result.equity_curve.pct_change().dropna()
+    if strategy_returns.empty:
+        return
+
+    # Market index for regime classification
+    if include_regime:
+        try:
+            mkt_bars = cache.get_daily_bars(market_index, start, end)
+            if not mkt_bars.empty:
+                mkt = mkt_bars.set_index("date").sort_index()["close"].pct_change().dropna()
+                from astrategy.engine.regime import classify_regimes, per_regime_metrics
+                regimes = classify_regimes(mkt, window=60, min_duration=10)
+                regimes_aligned = regimes.reindex(strategy_returns.index, method="ffill")
+                result.summary["regime_metrics"] = per_regime_metrics(strategy_returns, regimes_aligned)
+        except Exception as e:
+            log.debug("regime enrichment skipped: %s", e)
+
+    if include_factor:
+        try:
+            from astrategy.engine.attribution import (
+                attribute_returns, build_factor_returns, summarize_attribution,
+            )
+            factor_df = build_factor_returns(cache, universe, start, end, market_index)
+            attr = attribute_returns(strategy_returns, factor_df)
+            if attr is not None:
+                result.summary["factor_attribution"] = summarize_attribution(attr)
+        except Exception as e:
+            log.debug("factor attribution skipped: %s", e)
+
+
 class Backtester:
     def __init__(
         self,
@@ -77,6 +124,7 @@ class Backtester:
         self.fills: list[Fill] = []
         self.rejections: list[Fill] = []
         self.rng = random.Random(config.random_seed)
+        self._ctx: StrategyContext | None = None
 
     def run(self) -> BacktestResult:
         if not self.data:
@@ -92,6 +140,7 @@ class Backtester:
             universe=list(self.data.keys()),
             data=self.data,
         )
+        self._ctx = ctx
         self.strategy.initialize(ctx)
 
         equity_by_date: dict[pd.Timestamp, float] = {}
@@ -199,7 +248,7 @@ class Backtester:
             self._reject(order, date, open_price, "apply_buy_failed")
             return
 
-        self.fills.append(Fill(
+        self._record_fill(Fill(
             code=order.code,
             side=OrderSide.BUY,
             shares=shares,
@@ -234,7 +283,7 @@ class Backtester:
             self._reject(order, date, open_price, "apply_sell_failed")
             return
 
-        self.fills.append(Fill(
+        self._record_fill(Fill(
             code=order.code,
             side=OrderSide.SELL,
             shares=shares,
@@ -242,6 +291,14 @@ class Backtester:
             cost=cost,
             timestamp=date,
         ))
+
+    def _record_fill(self, fill: Fill) -> None:
+        self.fills.append(fill)
+        if self._ctx is not None:
+            try:
+                self.strategy.on_fill(fill, self._ctx)
+            except Exception as e:  # noqa: BLE001
+                log.warning("strategy.on_fill raised: %s", e)
 
     def _reject(self, order: Order, date: pd.Timestamp, price: float, reason: str) -> None:
         self.rejections.append(Fill(

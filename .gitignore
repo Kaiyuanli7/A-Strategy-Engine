@@ -8,6 +8,7 @@ venv/
 *.db
 *.db-journal
 data/*.db
+data/evaluations/
 .DS_Store
 .idea/
 .vscode/

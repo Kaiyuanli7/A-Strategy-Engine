@@ -1,8 +1,7 @@
 import type {
-  BacktestRequest,
-  BacktestResult,
-  BacktestRunListItem,
-  BacktestRunResponse,
+  EvaluateParams,
+  FactorEvaluation,
+  FactorMeta,
   Health,
   StockOHLCV,
   Universe,
@@ -30,7 +29,11 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => req<Health>('/health'),
-  universe: () => req<Universe>('/api/data/universe'),
+  universe: (index = '000300', asOf?: string) => {
+    const qs = new URLSearchParams({ index })
+    if (asOf) qs.set('as_of', asOf)
+    return req<Universe>(`/api/data/universe?${qs.toString()}`)
+  },
   stock: (code: string, start?: string, end?: string) => {
     const params = new URLSearchParams()
     if (start) params.set('start', start)
@@ -38,11 +41,18 @@ export const api = {
     const qs = params.toString()
     return req<StockOHLCV>(`/api/data/stock/${code}${qs ? '?' + qs : ''}`)
   },
-  runs: () => req<BacktestRunListItem[]>('/api/backtest/runs'),
-  result: (runId: string) => req<BacktestResult>(`/api/backtest/results/${runId}`),
-  runBacktest: (body: BacktestRequest) =>
-    req<BacktestRunResponse>('/api/backtest/run', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
+  sectors: () => req<{ sectors_l1: string[] }>('/api/data/sectors'),
+  factors: () => req<FactorMeta[]>('/api/factors'),
+  evaluateFactor: (name: string, params: EvaluateParams) => {
+    const qs = new URLSearchParams({
+      start: params.start,
+      end: params.end,
+      universe: params.universe,
+      horizon: String(params.horizon),
+      rebalance: params.rebalance,
+    })
+    if (params.lookback !== undefined) qs.set('lookback', String(params.lookback))
+    if (params.use_cache !== undefined) qs.set('use_cache', String(params.use_cache))
+    return req<FactorEvaluation>(`/api/factors/${name}/evaluate?${qs.toString()}`)
+  },
 }

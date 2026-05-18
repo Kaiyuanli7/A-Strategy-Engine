@@ -99,6 +99,263 @@ class AKShareClient:
         })
         return out.drop_duplicates(subset=["code"]).reset_index(drop=True)
 
+    # ----- Alt-data sources (factor research) ------------------------------
+
+    def get_northbound_holdings(self, code: str, start: str, end: str) -> pd.DataFrame:
+        """
+        Per-stock northbound (Stock Connect) holding history.
+
+        Tries multiple AKShare endpoints because the name has drifted across
+        versions. Returns a tidy DataFrame with: date, holding_shares,
+        holding_value, holding_pct, net_buy_shares, net_buy_value.
+
+        Empty DataFrame if all endpoints fail; caller is expected to fall back
+        to synthetic data (offline / sandboxed environments).
+        """
+        candidates = [
+            "stock_hsgt_hold_stock_em",
+            "stock_hsgt_individual_em",
+            "stock_individual_fund_flow",
+        ]
+        last_err: Exception | None = None
+        for fn_name in candidates:
+            fn = getattr(self._ak, fn_name, None)
+            if fn is None:
+                continue
+            try:
+                self._sleep()
+                df = self._call_with_retry(fn, symbol=code)
+                norm = self._normalize_northbound(df, start, end)
+                if not norm.empty:
+                    log.info("northbound for %s via %s (%d rows)", code, fn_name, len(norm))
+                    return norm
+            except Exception as e:
+                log.warning("northbound %s failed for %s: %s", fn_name, code, e)
+                last_err = e
+        log.warning("all northbound endpoints failed for %s; last err: %s", code, last_err)
+        return pd.DataFrame(columns=[
+            "date", "holding_shares", "holding_value", "holding_pct",
+            "net_buy_shares", "net_buy_value",
+        ])
+
+    @staticmethod
+    def _normalize_northbound(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
+        """Normalize AKShare's varying column schemas into our canonical layout."""
+        if df is None or df.empty:
+            return pd.DataFrame()
+        renames = {
+            "日期": "date", "持股日期": "date", "trade_date": "date",
+            "持股数量": "holding_shares", "持股股数": "holding_shares",
+            "持股市值": "holding_value", "持股市值（元）": "holding_value",
+            "持股比例": "holding_pct", "占总股本比例": "holding_pct",
+            "净买入金额": "net_buy_value", "净买入": "net_buy_value",
+            "净买入股数": "net_buy_shares",
+        }
+        df = df.rename(columns=renames)
+        if "date" not in df.columns:
+            return pd.DataFrame()
+        df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+        df = df[(df["date"] >= start) & (df["date"] <= end)].copy()
+        for col in ("holding_shares", "holding_value", "holding_pct",
+                    "net_buy_shares", "net_buy_value"):
+            if col not in df.columns:
+                df[col] = pd.NA
+        keep = ["date", "holding_shares", "holding_value", "holding_pct",
+                "net_buy_shares", "net_buy_value"]
+        return df[keep].drop_duplicates("date").sort_values("date").reset_index(drop=True)
+
+    def get_margin_detail(self, code: str, start: str, end: str) -> pd.DataFrame:
+        """
+        Per-stock margin (融资融券) detail. Picks SH or SZ endpoint by code
+        prefix. Returns tidy DataFrame: date, financing_balance, short_balance,
+        financing_buy_amount, financing_repay_amount, net_financing_change.
+        """
+        if code.startswith(("60", "68")):
+            fn_name = "stock_margin_detail_sse"
+        elif code.startswith(("00", "30")):
+            fn_name = "stock_margin_detail_szse"
+        else:
+            log.info("margin: skipping non-SH/SZ code %s", code)
+            return pd.DataFrame()
+        fn = getattr(self._ak, fn_name, None)
+        if fn is None:
+            log.warning("margin: AKShare missing %s", fn_name)
+            return pd.DataFrame()
+        try:
+            self._sleep()
+            df = self._call_with_retry(fn, date=start.replace("-", ""))
+        except Exception as e:
+            log.warning("margin endpoint %s failed: %s", fn_name, e)
+            return pd.DataFrame()
+        return self._normalize_margin(df, code, start, end)
+
+    @staticmethod
+    def _normalize_margin(df: pd.DataFrame, code: str, start: str, end: str) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame()
+        renames = {
+            "信用交易日期": "date", "日期": "date",
+            "证券代码": "code", "标的证券代码": "code",
+            "融资余额": "financing_balance",
+            "融券余额": "short_balance",
+            "融资买入额": "financing_buy_amount",
+            "融资偿还额": "financing_repay_amount",
+        }
+        df = df.rename(columns=renames)
+        if "code" in df.columns:
+            df["code"] = df["code"].astype(str).str.zfill(6)
+            df = df[df["code"] == code]
+        if "date" not in df.columns or df.empty:
+            return pd.DataFrame()
+        df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+        df = df[(df["date"] >= start) & (df["date"] <= end)].copy()
+        for c in ("financing_balance", "short_balance",
+                  "financing_buy_amount", "financing_repay_amount"):
+            if c not in df.columns:
+                df[c] = pd.NA
+        df["net_financing_change"] = df["financing_buy_amount"].astype(float) - df["financing_repay_amount"].astype(float)
+        keep = ["date", "financing_balance", "short_balance",
+                "financing_buy_amount", "financing_repay_amount",
+                "net_financing_change"]
+        return df[keep].drop_duplicates("date").sort_values("date").reset_index(drop=True)
+
+    def get_lhb_disclosure(self, date: str) -> pd.DataFrame:
+        """
+        龙虎榜 (top buyer/seller seats) disclosure for a single date.
+
+        Returns tidy DataFrame: code, date, seq, seat_name, seat_type,
+        buy_amount, sell_amount, net_amount.
+        """
+        candidates = ["stock_lhb_detail_em", "stock_lhb_jgstatistic_em"]
+        for fn_name in candidates:
+            fn = getattr(self._ak, fn_name, None)
+            if fn is None:
+                continue
+            try:
+                self._sleep()
+                df = self._call_with_retry(
+                    fn,
+                    start_date=date.replace("-", ""),
+                    end_date=date.replace("-", ""),
+                )
+                norm = self._normalize_lhb(df)
+                if not norm.empty:
+                    return norm
+            except Exception as e:
+                log.warning("lhb %s failed for %s: %s", fn_name, date, e)
+        return pd.DataFrame(columns=[
+            "code", "date", "seq", "seat_name", "seat_type",
+            "buy_amount", "sell_amount", "net_amount",
+        ])
+
+    @staticmethod
+    def _normalize_lhb(df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame()
+        renames = {
+            "代码": "code", "证券代码": "code",
+            "上榜日": "date", "交易日期": "date",
+            "营业部名称": "seat_name", "机构名称": "seat_name",
+            "买入金额": "buy_amount", "买入额": "buy_amount",
+            "卖出金额": "sell_amount", "卖出额": "sell_amount",
+            "净买额": "net_amount", "净买入额": "net_amount",
+        }
+        df = df.rename(columns=renames)
+        if "code" not in df.columns or "date" not in df.columns:
+            return pd.DataFrame()
+        df["code"] = df["code"].astype(str).str.zfill(6)
+        df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+        for c in ("buy_amount", "sell_amount", "net_amount"):
+            if c not in df.columns:
+                df[c] = pd.NA
+        if "seat_name" not in df.columns:
+            df["seat_name"] = "unknown"
+        # Heuristic seat-type classification
+        def classify(name: str) -> str:
+            if pd.isna(name):
+                return "retail"
+            s = str(name)
+            if "机构专用" in s or "QFII" in s or "RQFII" in s:
+                return "institutional"
+            if "营业部" in s or "证券" in s:
+                return "hot_money"
+            return "retail"
+        df["seat_type"] = df["seat_name"].apply(classify)
+        # Sequence per (code, date)
+        df = df.sort_values(["code", "date", "net_amount"], ascending=[True, True, False])
+        df["seq"] = df.groupby(["code", "date"]).cumcount()
+        keep = ["code", "date", "seq", "seat_name", "seat_type",
+                "buy_amount", "sell_amount", "net_amount"]
+        return df[keep].reset_index(drop=True)
+
+    def get_limit_pool(self, date: str, direction: str = "up") -> pd.DataFrame:
+        """
+        Limit-up (`zt_pool`) or limit-down (`dt_pool`) stocks for a date.
+
+        Returns tidy DataFrame: code, date, direction, consecutive_days,
+        is_first, turnover_pct.
+        """
+        fn_name = "stock_zt_pool_em" if direction == "up" else "stock_dt_pool_em"
+        fn = getattr(self._ak, fn_name, None)
+        if fn is None:
+            log.warning("limit pool: AKShare missing %s", fn_name)
+            return pd.DataFrame()
+        try:
+            self._sleep()
+            df = self._call_with_retry(fn, date=date.replace("-", ""))
+        except Exception as e:
+            log.warning("limit pool %s failed: %s", fn_name, e)
+            return pd.DataFrame()
+        return self._normalize_limit_pool(df, date, direction)
+
+    @staticmethod
+    def _normalize_limit_pool(df: pd.DataFrame, date: str, direction: str) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame()
+        renames = {
+            "代码": "code", "股票代码": "code",
+            "连板数": "consecutive_days", "几天几板": "consecutive_days",
+            "换手率": "turnover_pct",
+            "首次封板时间": "first_seal_time",
+        }
+        df = df.rename(columns=renames)
+        if "code" not in df.columns:
+            return pd.DataFrame()
+        df["code"] = df["code"].astype(str).str.zfill(6)
+        df["date"] = date
+        df["direction"] = direction
+        if "consecutive_days" not in df.columns:
+            df["consecutive_days"] = 1
+        df["is_first"] = (df["consecutive_days"] <= 1).astype(int)
+        if "turnover_pct" not in df.columns:
+            df["turnover_pct"] = pd.NA
+        keep = ["code", "date", "direction", "consecutive_days", "is_first", "turnover_pct"]
+        return df[keep].reset_index(drop=True)
+
+    def get_analyst_ratings(self, code: str) -> pd.DataFrame:
+        """Analyst rating snapshot. Best-effort; returns empty DataFrame on failure."""
+        fn = getattr(self._ak, "stock_analyst_rank_em", None)
+        if fn is None:
+            return pd.DataFrame()
+        try:
+            self._sleep()
+            df = self._call_with_retry(fn, symbol=code)
+        except Exception as e:
+            log.warning("analyst ratings failed for %s: %s", code, e)
+            return pd.DataFrame()
+        if df is None or df.empty:
+            return pd.DataFrame()
+        renames = {"日期": "report_date", "评级": "rating", "目标价": "target_price",
+                   "EPS预测": "eps_estimate", "营收预测": "revenue_estimate"}
+        df = df.rename(columns=renames)
+        if "report_date" not in df.columns:
+            return pd.DataFrame()
+        df["report_date"] = pd.to_datetime(df["report_date"]).dt.strftime("%Y-%m-%d")
+        for c in ("rating", "target_price", "eps_estimate", "revenue_estimate"):
+            if c not in df.columns:
+                df[c] = pd.NA
+        return df[["report_date", "rating", "target_price", "eps_estimate", "revenue_estimate"]].copy()
+
     def get_daily_ohlcv(
         self,
         code: str,

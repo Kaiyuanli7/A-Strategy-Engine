@@ -1,212 +1,162 @@
-"""End-to-end tests for the FastAPI server using TestClient + isolated tmp DB."""
+"""End-to-end API tests for the factor research workstation."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
 from astrategy.api.main import app, get_cache, get_loader, get_storage
 from astrategy.api.storage import RunStorage
-from astrategy.config import classify_board, is_st_name
-from astrategy.data.akshare_client import AKShareClient
 from astrategy.data.cache import SQLiteCache
 from astrategy.data.loader import DataLoader
-from astrategy.data.synthetic import generate_synthetic_ohlcv
-from astrategy.data.universe import DEMO_UNIVERSE
 
 
 @pytest.fixture
-def tmp_db(tmp_path: Path) -> Path:
-    """An isolated SQLite DB seeded with synthetic data for all demo stocks."""
-    db = tmp_path / "test.db"
-    cache = SQLiteCache(str(db))
-    for code, name in DEMO_UNIVERSE:
-        cache.upsert_stock_meta(code, name, classify_board(code), is_st_name(name))
-        df = generate_synthetic_ohlcv(code, "2023-05-18", "2026-05-18")
-        cache.upsert_daily_bars(code, df)
-        cache.record_fetch(code, "2023-05-18", "2026-05-18", len(df))
-    cache.upsert_index_constituents("DEMO", [c for c, _ in DEMO_UNIVERSE], "2026-05-18")
-    return db
+def cache(tmp_path):
+    return SQLiteCache(db_path=str(tmp_path / "test.db"))
 
 
 @pytest.fixture
-def client(tmp_db: Path) -> TestClient:
-    """TestClient with FastAPI deps overridden to use the tmp_db."""
-    db_path = str(tmp_db)
+def storage(tmp_path):
+    return RunStorage(db_path=str(tmp_path / "test.db"))
 
-    def _cache_override() -> SQLiteCache:
-        return SQLiteCache(db_path)
 
-    def _storage_override() -> RunStorage:
-        return RunStorage(db_path)
+@pytest.fixture
+def loader(cache):
+    return DataLoader(cache=cache)
 
-    def _loader_override() -> DataLoader:
-        # Real loader pointed at the tmp DB; AKShare client never hit because data is cached
-        return DataLoader(client=AKShareClient(), cache=SQLiteCache(db_path))
 
-    app.dependency_overrides[get_cache] = _cache_override
-    app.dependency_overrides[get_storage] = _storage_override
-    app.dependency_overrides[get_loader] = _loader_override
+@pytest.fixture
+def primed_cache(cache, loader):
+    """Synthetic CSI 300 universe with 60+ stocks priming the cache."""
+    counts = loader.prime_universe_synthetic(
+        index_code="000300",
+        start="2023-01-01",
+        end="2025-12-31",
+        n_members=60,
+    )
+    assert counts["members"] >= 60
+    return cache
+
+
+@pytest.fixture
+def client(primed_cache, storage, loader):
+    app.dependency_overrides[get_cache] = lambda: primed_cache
+    app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_loader] = lambda: loader
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
 
 
-# --- meta ---------------------------------------------------------------------
-
-def test_health(client: TestClient):
+def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["cached_stocks"] == 10
-    assert body["cached_runs"] == 0
-    assert body["version"]
+    assert "version" in body
+    assert body["cached_stocks"] >= 1
 
 
-def test_list_strategies(client: TestClient):
-    r = client.get("/api/strategies")
-    assert r.status_code == 200
-    assert "ma_cross" in r.json()["types"]
-
-
-# --- data ---------------------------------------------------------------------
-
-def test_universe(client: TestClient):
-    r = client.get("/api/data/universe")
+def test_universe_returns_index_members(client):
+    r = client.get("/api/data/universe?index=000300")
     assert r.status_code == 200
     body = r.json()
-    assert body["name"] == "demo"
-    assert len(body["codes"]) == 10
-    assert "600519" in body["codes"]
-    stocks = {s["code"]: s for s in body["stocks"]}
-    assert stocks["300750"]["board"] == "chinext"
-    assert stocks["600519"]["board"] == "main_sh"
+    assert body["name"]
+    assert len(body["codes"]) >= 10
+    assert len(body["stocks"]) == len(body["codes"])
 
 
-def test_get_stock(client: TestClient):
-    r = client.get("/api/data/stock/600519")
+def test_stock_ohlcv_endpoint(client, primed_cache):
+    code = primed_cache.all_meta_codes()[0]
+    r = client.get(f"/api/data/stock/{code}?start=2023-01-01&end=2025-12-31")
     assert r.status_code == 200
     body = r.json()
-    assert body["code"] == "600519"
-    assert body["name"] == "贵州茅台"
-    assert body["board"] == "main_sh"
-    assert len(body["bars"]) > 100
-    bar = body["bars"][0]
-    assert {"date", "open", "high", "low", "close", "volume"} <= bar.keys()
+    assert body["code"] == code
+    assert len(body["bars"]) > 0
 
 
-def test_get_stock_not_found(client: TestClient):
-    r = client.get("/api/data/stock/999999")
+def test_stock_ohlcv_404_for_unknown(client):
+    r = client.get("/api/data/stock/999999?start=2023-01-01&end=2025-12-31")
     assert r.status_code == 404
 
 
-def test_get_stock_date_range(client: TestClient):
-    r = client.get("/api/data/stock/600519", params={"start": "2024-01-01", "end": "2024-02-01"})
+def test_sectors_endpoint(client):
+    r = client.get("/api/data/sectors")
     assert r.status_code == 200
-    bars = r.json()["bars"]
-    assert all("2024-01-01" <= b["date"] <= "2024-02-01" for b in bars)
+    assert "sectors_l1" in r.json()
 
 
-def test_fetch_synthetic(client: TestClient, tmp_path):
-    payload = {
-        "codes": ["600519", "601318"],
-        "start": "2023-05-18",
-        "end": "2026-05-18",
-        "synthetic": True,
-    }
-    r = client.post("/api/data/fetch", json=payload)
+def test_list_factors_includes_northbound_momentum(client):
+    r = client.get("/api/factors")
     assert r.status_code == 200
-    body = r.json()
-    assert body["used_synthetic"] is True
-    assert body["rows_per_code"]["600519"] > 100
-    assert body["rows_per_code"]["601318"] > 100
+    factors = r.json()
+    names = [f["name"] for f in factors]
+    assert "northbound_momentum" in names
+    nm = next(f for f in factors if f["name"] == "northbound_momentum")
+    assert nm["category"] == "flow"
+    assert nm["lookback_days"] > 0
+    assert any(p["name"] == "lookback" for p in nm["params"])
 
 
-# --- backtest -----------------------------------------------------------------
-
-VALID_BACKTEST_REQ = {
-    "strategy": {
-        "type": "ma_cross",
-        "params": {"fast": 5, "slow": 20, "position_size_pct": 0.05, "max_positions": 10},
-    },
-    "universe": [c for c, _ in DEMO_UNIVERSE],
-    "config": {
-        "start": "2023-05-18",
-        "end": "2026-05-18",
-        "initial_cash": 1_000_000.0,
-        "limit_hit_fill_prob": 0.20,
-        "random_seed": 42,
-    },
-}
-
-
-def test_run_backtest_completes(client: TestClient):
-    r = client.post("/api/backtest/run", json=VALID_BACKTEST_REQ)
+def test_evaluate_northbound_momentum_returns_full_payload(client):
+    r = client.get(
+        "/api/factors/northbound_momentum/evaluate",
+        params={
+            "start": "2023-06-01",
+            "end": "2024-12-31",
+            "universe": "000300",
+            "horizon": 20,
+            "rebalance": "weekly",
+            "lookback": 5,
+        },
+    )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["status"] == "completed"
-    assert "run_id" in body
-    s = body["summary"]
-    assert s["initial_equity"] == pytest.approx(1_000_000.0)
-    assert s["n_bars"] > 100
-    assert s["n_fills"] > 0
+    assert body["factor"]["name"] == "northbound_momentum"
+    assert body["params"]["lookback"] == 5
+    assert body["n_dates"] > 0
+    assert len(body["ic_series"]) > 0
+    assert "ic_summary" in body
+    assert len(body["quintile_cum"]) > 0
+    qpoint = body["quintile_cum"][0]
+    for col in ("q1", "q2", "q3", "q4", "q5", "long_short"):
+        assert col in qpoint
+    assert len(body["decay"]) >= 3
 
 
-def test_run_backtest_unknown_strategy(client: TestClient):
-    req = dict(VALID_BACKTEST_REQ)
-    req["strategy"] = {"type": "nonexistent", "params": {}}
-    r = client.post("/api/backtest/run", json=req)
-    assert r.status_code == 422  # pydantic Literal validation
+def test_evaluate_returns_cached_on_second_call(client):
+    params = {
+        "start": "2023-06-01",
+        "end": "2024-06-30",
+        "universe": "000300",
+        "horizon": 10,
+        "rebalance": "weekly",
+        "lookback": 5,
+    }
+    r1 = client.get("/api/factors/northbound_momentum/evaluate", params=params)
+    assert r1.status_code == 200
+    assert r1.json()["cached"] is False
+
+    r2 = client.get("/api/factors/northbound_momentum/evaluate", params=params)
+    assert r2.status_code == 200
+    assert r2.json()["cached"] is True
 
 
-def test_run_backtest_unknown_universe(client: TestClient):
-    req = {**VALID_BACKTEST_REQ, "universe": ["999999"]}
-    r = client.post("/api/backtest/run", json=req)
+def test_evaluate_unknown_factor_404(client):
+    r = client.get("/api/factors/does_not_exist/evaluate")
     assert r.status_code == 404
 
 
-def test_get_backtest_result(client: TestClient):
-    run = client.post("/api/backtest/run", json=VALID_BACKTEST_REQ).json()
-    run_id = run["run_id"]
-
-    r = client.get(f"/api/backtest/results/{run_id}")
+def test_list_backtest_runs_empty(client):
+    r = client.get("/api/backtest/runs")
     assert r.status_code == 200
-    body = r.json()
-    assert body["run_id"] == run_id
-    assert body["status"] == "completed"
-    assert len(body["equity_curve"]) > 100
-    assert len(body["fills"]) > 0
-    assert body["config"]["strategy"]["type"] == "ma_cross"
+    assert r.json() == []
 
 
-def test_get_backtest_result_not_found(client: TestClient):
-    r = client.get("/api/backtest/results/abc123nonexistent")
-    assert r.status_code == 404
-
-
-def test_list_backtest_runs(client: TestClient):
-    # Empty
-    assert client.get("/api/backtest/runs").json() == []
-
-    client.post("/api/backtest/run", json=VALID_BACKTEST_REQ)
-    client.post("/api/backtest/run", json={
-        **VALID_BACKTEST_REQ,
-        "strategy": {"type": "ma_cross", "params": {"fast": 10, "slow": 30}},
-    })
-
-    runs = client.get("/api/backtest/runs").json()
-    assert len(runs) == 2
-    assert all(r["status"] == "completed" for r in runs)
-    assert all(r["strategy_type"] == "ma_cross" for r in runs)
-    assert runs[0]["universe_size"] == 10
-
-
-def test_backtest_persists_equity_curve_ordered(client: TestClient):
-    run = client.post("/api/backtest/run", json=VALID_BACKTEST_REQ).json()
-    result = client.get(f"/api/backtest/results/{run['run_id']}").json()
-    dates = [p["date"] for p in result["equity_curve"]]
-    assert dates == sorted(dates)
+def test_list_walk_forward_runs_empty(client):
+    r = client.get("/api/backtest/walk_forward")
+    assert r.status_code == 200
+    assert r.json() == []
