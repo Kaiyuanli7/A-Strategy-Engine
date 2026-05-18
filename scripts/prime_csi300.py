@@ -105,21 +105,40 @@ def _prime_real(loader: DataLoader, args) -> dict:
           f"{fund_ok}/{len(codes_only)} stocks "
           f"({'real' if real_fund else 'partial — many stocks missing fundamentals'})")
 
+    # 5b. Derive real daily PE / PB / PS from fundamentals + close prices
+    if real_fund:
+        print(f"\n  → Deriving real daily PE / PB / PS from fundamentals + bars...")
+        val_results = loader.backfill_valuation_daily_from_fundamentals(
+            codes_only, args.start, args.end,
+        )
+        val_total = sum(val_results.values())
+        val_ok = sum(1 for n in val_results.values() if n > 100)
+        counts["valuation_real_total"] = val_total
+        counts["valuation_real_ok_stocks"] = val_ok
+        real_val = val_ok > len(codes_only) * 0.3
+        print(f"  {'✓' if real_val else '⚠'} Daily PE/PB/PS: {val_total} rows across "
+              f"{val_ok}/{len(codes_only)} stocks ({'real' if real_val else 'partial'})")
+    else:
+        real_val = False
+
     # 6. Synthetic fill-in for tables without a real fetcher yet.
     # Skip tables we've already populated with real data so we don't clobber.
-    skip = {"fundamentals"}  # primed above
+    skip = {"fundamentals"}
     if real_nb:
         skip.add("northbound_daily")
-    print(f"\n  → Filling in synthetic data for tables without real fetchers "
-          f"yet: valuation_daily, sector, margin_daily, lhb"
-          f"{'' if real_nb else ', northbound_daily (fallback)'}")
+    if real_val:
+        skip.add("valuation_daily")
+    print(f"\n  → Filling in synthetic data for the remaining tables...")
     extras = loader.prime_extras_synthetic(
         codes_only, args.start, args.end, skip_tables=frozenset(skip),
     )
-    counts["valuation_synth"] = sum(e["valuation_daily"] for e in extras.values())
     counts["sector_synth"] = sum(e["sector"] for e in extras.values())
-    print(f"  ⚠ valuation_daily + sector are SYNTHETIC.")
-    print(f"    Real daily PE/PB/PS history fetcher lands in Sprint 5+.")
+    if not real_val:
+        counts["valuation_synth"] = sum(e["valuation_daily"] for e in extras.values())
+        print(f"  ⚠ valuation_daily is SYNTHETIC (real derivation needs fundamentals).")
+    else:
+        print(f"  ✓ valuation_daily was derived from real fundamentals + close.")
+    print(f"  ⚠ sector classification still SYNTHETIC (real fetcher in Sprint 5+).")
 
     # 6. Index OHLCV (real)
     try:

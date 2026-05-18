@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS fundamentals (
     eps_ttm                  REAL,
     operating_cash_flow_ttm  REAL,
     net_income_ttm           REAL,
+    book_value_per_share     REAL,
+    revenue_per_share        REAL,
     PRIMARY KEY (code, report_date)
 );
 CREATE INDEX IF NOT EXISTS idx_fund_announce ON fundamentals(code, announce_date);
@@ -194,6 +196,8 @@ class SQLiteCache:
             # (fresh DBs already have them via the CREATE TABLE above).
             self._migrate_add_column(conn, "fundamentals", "operating_cash_flow_ttm", "REAL")
             self._migrate_add_column(conn, "fundamentals", "net_income_ttm", "REAL")
+            self._migrate_add_column(conn, "fundamentals", "book_value_per_share", "REAL")
+            self._migrate_add_column(conn, "fundamentals", "revenue_per_share", "REAL")
 
     @staticmethod
     def _migrate_add_column(conn: sqlite3.Connection, table: str, col: str, col_type: str) -> None:
@@ -343,14 +347,17 @@ class SQLiteCache:
                 self._opt(r.get("eps_ttm")),
                 self._opt(r.get("operating_cash_flow_ttm")),
                 self._opt(r.get("net_income_ttm")),
+                self._opt(r.get("book_value_per_share")),
+                self._opt(r.get("revenue_per_share")),
             ))
         with self._conn() as conn:
             conn.executemany(
                 "INSERT OR REPLACE INTO fundamentals "
                 "(code, report_date, announce_date, pe_ttm, pb, ps_ttm, roe_ttm, "
                 "revenue_yoy, net_profit_yoy, eps_ttm, "
-                "operating_cash_flow_ttm, net_income_ttm) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "operating_cash_flow_ttm, net_income_ttm, "
+                "book_value_per_share, revenue_per_share) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
         return len(rows)
@@ -360,7 +367,8 @@ class SQLiteCache:
         sql = (
             "SELECT report_date, announce_date, pe_ttm, pb, ps_ttm, roe_ttm, "
             "revenue_yoy, net_profit_yoy, eps_ttm, "
-            "operating_cash_flow_ttm, net_income_ttm "
+            "operating_cash_flow_ttm, net_income_ttm, "
+            "book_value_per_share, revenue_per_share "
             "FROM fundamentals WHERE code = ?"
         )
         params: list = [code]
@@ -603,7 +611,8 @@ class SQLiteCache:
             row = conn.execute(
                 "SELECT report_date, announce_date, pe_ttm, pb, ps_ttm, roe_ttm, "
                 "revenue_yoy, net_profit_yoy, eps_ttm, "
-                "operating_cash_flow_ttm, net_income_ttm "
+                "operating_cash_flow_ttm, net_income_ttm, "
+                "book_value_per_share, revenue_per_share "
                 "FROM fundamentals WHERE code = ? AND announce_date < ? "
                 "ORDER BY announce_date DESC LIMIT 1",
                 (code, as_of),
@@ -618,7 +627,8 @@ class SQLiteCache:
             df = pd.read_sql_query(
                 "SELECT report_date, announce_date, pe_ttm, pb, ps_ttm, roe_ttm, "
                 "revenue_yoy, net_profit_yoy, eps_ttm, "
-                "operating_cash_flow_ttm, net_income_ttm "
+                "operating_cash_flow_ttm, net_income_ttm, "
+                "book_value_per_share, revenue_per_share "
                 "FROM fundamentals WHERE code = ? AND announce_date < ? "
                 "ORDER BY announce_date DESC LIMIT ?",
                 conn,

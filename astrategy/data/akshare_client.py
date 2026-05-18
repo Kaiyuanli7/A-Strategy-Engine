@@ -463,6 +463,12 @@ class AKShareClient:
         "归属于母公司股东的净利润同比增长": "net_profit_yoy",
         "归属母公司股东的净利润同比": "net_profit_yoy",
         "净利润同比增长率": "net_profit_yoy",
+        # Per-share book value + sales — used to derive daily PE / PB / PS.
+        "每股净资产": "book_value_per_share",
+        "每股净资产(摊薄)": "book_value_per_share",
+        "每股净资产-摊薄": "book_value_per_share",
+        "每股营业总收入": "revenue_per_share",
+        "每股营业收入": "revenue_per_share",
     }
 
     @classmethod
@@ -508,12 +514,14 @@ class AKShareClient:
         ).dt.strftime("%Y-%m-%d")
         # Ensure all schema cols exist even if missing in this stock's response
         for col in ("roe_ttm", "eps_ttm", "operating_cash_flow_ttm",
-                    "net_income_ttm", "revenue_yoy", "net_profit_yoy"):
+                    "net_income_ttm", "revenue_yoy", "net_profit_yoy",
+                    "book_value_per_share", "revenue_per_share"):
             if col not in out.columns:
                 out[col] = pd.NA
         keep = ["report_date", "announce_date", "roe_ttm", "eps_ttm",
                 "operating_cash_flow_ttm", "net_income_ttm",
-                "revenue_yoy", "net_profit_yoy"]
+                "revenue_yoy", "net_profit_yoy",
+                "book_value_per_share", "revenue_per_share"]
         return out[keep].reset_index(drop=True)
 
     def get_daily_ohlcv(

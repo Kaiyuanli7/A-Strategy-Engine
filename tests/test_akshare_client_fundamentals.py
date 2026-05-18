@@ -130,3 +130,30 @@ def test_normalizer_parses_yyyymmdd_dates():
     assert dates == sorted(dates)
     assert dates[0] == "2023-06-30"
     assert dates[-1] == "2024-03-31"
+
+
+def test_normalizer_captures_bvps_and_rps():
+    """The new daily PE/PB/PS derivation needs book_value_per_share and revenue_per_share."""
+    raw = pd.DataFrame({
+        "选项": ["每股指标", "每股指标"],
+        "指标": ["每股净资产", "每股营业总收入"],
+        "20240331": [8.50, 22.30],
+        "20231231": [8.20, 84.50],
+    })
+    out = AKShareClient._normalize_quarterly_fundamentals(raw)
+    assert "book_value_per_share" in out.columns
+    assert "revenue_per_share" in out.columns
+    q1 = out[out["report_date"] == "2024-03-31"].iloc[0]
+    assert q1["book_value_per_share"] == 8.50
+    assert q1["revenue_per_share"] == 22.30
+
+
+def test_normalizer_accepts_bvps_aliases():
+    raw = pd.DataFrame({
+        "选项": ["每股指标", "每股指标"],
+        "指标": ["每股净资产(摊薄)", "每股营业收入"],
+        "20240331": [10.5, 5.5],
+    })
+    out = AKShareClient._normalize_quarterly_fundamentals(raw)
+    assert out.iloc[0]["book_value_per_share"] == 10.5
+    assert out.iloc[0]["revenue_per_share"] == 5.5

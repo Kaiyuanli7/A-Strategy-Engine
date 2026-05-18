@@ -308,6 +308,74 @@ class DataLoader:
             results[code] = self.cache.upsert_fundamentals(code, df)
         return results
 
+    def backfill_valuation_daily_from_fundamentals(
+        self,
+        codes: list[str],
+        start: str,
+        end: str,
+    ) -> dict[str, int]:
+        """
+        Derive daily PE / PB / PS history from real fundamentals + daily close.
+
+        For each day in the OHLCV history, look up the most recent quarterly
+        fundamentals row with `announce_date <= day` (PIT). Compute:
+            PE_TTM = close / eps_ttm
+            PB     = close / book_value_per_share
+            PS_TTM = close / revenue_per_share
+        and upsert into `valuation_daily`. mkt_cap / float_cap are left NaN
+        unless already populated (the AKShare daily snapshot endpoint that
+        provides these is a separate sprint).
+
+        Real data only — this method assumes prime_fundamentals already ran.
+        Stocks missing eps_ttm / BVPS / RPS skip the corresponding column.
+
+        Returns dict {code: rows upserted}. 0 means no overlap between bars
+        and fundamentals (typically: fundamentals not primed for that code).
+        """
+        import numpy as np
+        results: dict[str, int] = {}
+        for code in tqdm(codes, desc="Daily valuation backfill", unit="stock"):
+            bars = self.cache.get_daily_bars(code, start, end)
+            if bars.empty:
+                results[code] = 0
+                continue
+            funds = self.cache.get_fundamentals(code)
+            if funds.empty:
+                results[code] = 0
+                continue
+            # Sort fundamentals by announce_date and pick PIT row per bar.
+            funds = funds.sort_values("announce_date").reset_index(drop=True)
+            bars = bars.sort_values("date").reset_index(drop=True)
+            # merge_asof gives us: for each bar.date, the most recent
+            # fundamentals row where announce_date <= bar.date.
+            joined = pd.merge_asof(
+                bars[["date", "close"]],
+                funds[["announce_date", "eps_ttm", "book_value_per_share",
+                       "revenue_per_share"]].rename(columns={"announce_date": "date"}),
+                on="date", direction="backward",
+            )
+            close = joined["close"].astype(float)
+            eps = joined["eps_ttm"].astype(float)
+            bvps = joined["book_value_per_share"].astype(float)
+            rps = joined["revenue_per_share"].astype(float)
+            joined["pe_ttm"] = (close / eps).where(eps > 0).replace([np.inf, -np.inf], np.nan)
+            joined["pb"] = (close / bvps).where(bvps > 0).replace([np.inf, -np.inf], np.nan)
+            joined["ps_ttm"] = (close / rps).where(rps > 0).replace([np.inf, -np.inf], np.nan)
+            # Preserve cached mkt_cap / float_cap if any
+            existing = self.cache.get_valuation_daily(code, start, end)
+            if not existing.empty:
+                existing = existing[["date", "mkt_cap", "float_cap"]]
+                existing["date"] = pd.to_datetime(existing["date"])
+                joined = joined.merge(existing, on="date", how="left")
+            else:
+                joined["mkt_cap"] = np.nan
+                joined["float_cap"] = np.nan
+            out = joined[["date", "pe_ttm", "pb", "ps_ttm", "mkt_cap", "float_cap"]].copy()
+            out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
+            n = self.cache.upsert_valuation_daily(code, out)
+            results[code] = n
+        return results
+
     def prime_analyst_estimates(self, codes: list[str]) -> dict[str, int]:
         """Fetch analyst rating snapshots (best-effort scaffold for Factor 2.3)."""
         results: dict[str, int] = {}
