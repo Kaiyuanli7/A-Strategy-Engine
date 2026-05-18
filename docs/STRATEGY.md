@@ -89,6 +89,31 @@ without #1 produces a Potemkin platform that experienced quants will see through
 composite portfolio are next.** Five well-evaluated factors with documented IC > 0.03
 OOS will beat twelve half-evaluated ones by July 2026.
 
+### Empirical finding worth noting — A-share momentum inversion
+
+First real-data evaluation (CSI 300, 2022-01-01 to 2025-12-31, weekly rebalance,
+horizon=20) for `momentum_skip` (20-day return, skipping the most recent 5 days):
+
+| Metric | Result | Read |
+|---|---|---|
+| IC mean | −0.0197 | Predictive power is *negative* |
+| IC t-stat | −2.34 | Statistically significant |
+| Quintile monotonicity | −0.6 | Top-by-score quintile UNDERPERFORMED bottom |
+| Long-short total return | −70.74% (4yr) | Buying past winners actively lost money |
+
+This is **not a bug** — it's the price-momentum inversion in A-shares that
+Liu/Stambaugh/Yuan 2019 §5 documents: retail extrapolation creates short-term
+mean reversion strong enough to overwhelm the US-style momentum effect on
+CSI 300 names over the 20-day-ahead horizon.
+
+**Implication for the composite**: signed-IC weighting is mandatory.
+`SignedICWeightedComposite` (in `astrategy/composites/ic_weighted.py`)
+weights factors by their trailing signed IC, so a consistently-negative-IC
+factor automatically gets a negative weight — turning it into a short
+signal in the composite with no code change. Avoid the temptation to flip
+the factor implementation; let the composite carry the sign so each
+factor stays academically faithful to its name.
+
 ---
 
 ## 3. What "making money" actually requires

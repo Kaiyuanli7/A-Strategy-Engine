@@ -224,8 +224,8 @@ rebalance to break even on costs. Bias toward holding periods that respect this.
 
 ## 7. Current state (as of 2026-05-18)
 
-Sprint 1 shipped (merged via PR #4). Sprint 2 partial is in progress on
-branch `claude/overhaul-codebase-O7UJJ`.
+Sprint 1 shipped (merged via PR #4). Sprint 2 partial + Sprint 3 are open
+on branch `claude/overhaul-codebase-O7UJJ` (PR #5).
 
 **Sprint 1 (merged)** — factor-research foundation:
 
@@ -263,7 +263,36 @@ API surfaces every factor at `/api/factors`; `/api/factors/{name}/evaluate`
 now accepts per-factor query params (`window`, `gap`, `skip`,
 `min_ocf_ratio`, `history_days`) plus the existing `lookback`.
 
-Test count: **183 passing** (up from 150 after Sprint 1).
+**Sprint 3 (also on PR #5)** — composite + portfolio backtest end-to-end:
+
+- **Real fundamentals fetcher**: `AKShareClient.get_quarterly_fundamentals`
+  wraps `stock_financial_abstract`; pivots indicator-wide → long format;
+  maps Chinese names to schema (roe_ttm, eps_ttm, operating_cash_flow_ttm,
+  net_income_ttm, revenue_yoy, net_profit_yoy). After re-priming on Mac,
+  Factor 2.1 (`earnings_quality`) evaluates on REAL data.
+- **Composite scoring** in `astrategy/composites/`: `EqualWeightComposite`
+  (baseline) and `SignedICWeightedComposite` (auto weights from trailing
+  signed IC — handles inverted factors like A-share price momentum
+  without manual sign flips).
+- **`TopNRankerStrategy`** in `astrategy/strategies/top_n_ranker.py`:
+  rebalances weekly/monthly, picks top-N by composite with sector cap,
+  single-name cap, ST exclusion, market-cap floor. Drives the existing
+  Backtester unchanged — T+1, price-limit fills, costs all apply.
+- **REST**: `POST /api/portfolios/backtest`, `GET /api/portfolios/runs/{id}`,
+  `GET /api/portfolios/runs`.
+- **Frontend**: `/portfolio` page with composite builder (1-5 factors with
+  per-factor params), portfolio config, equity curve, drawdown chart,
+  summary panel, fills table.
+
+**Empirical finding from first real-data eval** (CSI 300, 2022-2025):
+`momentum_skip` IC = -0.0197, monotonicity = -0.6 — price momentum is
+**inverted on A-shares** per Liu/Stambaugh/Yuan 2019 §5. The
+signed-IC-weighted composite handles this automatically: the factor's
+trailing negative IC produces a negative weight, turning it into a short
+signal in the composite without code changes.
+
+Test count: **222 passing** (up from 150 after Sprint 1, 183 after
+Sprint 2).
 
 **Critical gap closing in progress:** the sandbox running Claude Code can't
 reach eastmoney/sina (403). The owner must run `scripts/smoke_real_akshare.py`
@@ -287,15 +316,14 @@ Next sprints in priority order:
   validation on the owner's Mac.
 - Add the factor correlation matrix view to the frontend.
 
-### Sprint 3 — Composite + portfolio + walk-forward optimizer
+### Sprint 3 ✓ (PR #5) — Composite + portfolio backtest E2E
 
-- IC-weighted composite (rolling 60-day IC weights).
-- Equal-weight rank composite as baseline.
-- Top-N portfolio strategy (`TopNRankerStrategy`) wired to the existing
-  backtest engine.
-- Walk-forward weight optimization via optuna with overfit guards
-  (regularization toward equal weights, complexity penalty).
-- Backtest results page + walk-forward results page in the frontend.
+- IC-weighted composite (signed, rolling-window) and equal-weight composite.
+- `TopNRankerStrategy` wired to the existing backtest engine.
+- `/api/portfolios/backtest` REST endpoint + `/portfolio` frontend.
+- **Deferred**: walk-forward weight optimization via Optuna lands in a
+  follow-up PR (the WalkForwardRunner is already strategy-agnostic; just
+  needs a strategy_factory that fits weights per-window).
 
 ### Sprint 4 — Frontend Views 2-5
 

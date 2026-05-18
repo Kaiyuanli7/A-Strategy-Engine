@@ -17,12 +17,13 @@ instructions any AI assistant working on this repo should respect.
 | Sprint | What | State |
 |---|---|---|
 | 1 | Foundation: Factor ABC + IC/quintile/decay framework + Factor 1.1 Northbound Momentum E2E | shipped |
-| 2 | Factors 1.2 (NB acceleration), 2.1 (earnings quality), 2.4 (valuation composite), 3.2 (momentum skip-5) | in progress |
-| 3 | Composite scoring (equal-weight / IC-weighted / Optuna) + TopNRanker portfolio + walk-forward optimizer | deferred |
-| 4 | Frontend Views 2-5 (correlation, backtest results, live screener, factor sandbox) | deferred |
-| 5 | Real-data validation: prime CSI 300/500/1000 on owner's Mac; document IC per factor | deferred |
+| 2 | Factors 1.2 (NB acceleration), 2.1 (earnings quality), 2.4 (valuation composite), 3.2 (momentum skip-5) | shipped |
+| 3 | Real fundamentals fetcher + composite scoring (equal-weight + signed-IC) + TopNRankerStrategy + `/api/portfolios/*` + Portfolio frontend page | shipped |
+| 3.5 | Walk-forward weight optimization via Optuna | deferred |
+| 4 | Frontend Views 4-5 (live screener, factor discovery sandbox) | deferred |
+| 5 | Real daily PE/PB/PS fetcher + real-data validation pass on full CSI 300/500/1000 | deferred |
 | 6 | Paper trading + drift monitoring | deferred |
-| 7 | Portfolio risk layer (vol targeting, sector caps, drawdown breakers) + options | deferred |
+| 7 | Portfolio risk layer (vol targeting, sector caps as part of TopNRanker, drawdown breakers) + options | deferred |
 
 Engine kept from the previous design: event-driven bar-by-bar backtest with
 T+1, board-specific price limits, lot rounding, stamp tax, commission floor,
@@ -163,12 +164,27 @@ npm run dev                       # vite on :5173, proxies /api → :8000
 Open the app:
 
 ```bash
-open http://localhost:5173            # Factor Research Lab (home)
-open http://localhost:8000/docs       # OpenAPI / Swagger
-open http://localhost:8000/api/factors    # JSON list of registered factors
+open http://localhost:5173             # Factor Research Lab (home)
+open http://localhost:5173/portfolio   # Portfolio Backtest builder
+open http://localhost:8000/docs        # OpenAPI / Swagger
+open http://localhost:8000/api/factors # JSON list of registered factors
 ```
 
 Stop either server with `Ctrl+C`.
+
+### Building a portfolio backtest
+
+The `/portfolio` page lets you:
+1. Pick 1-5 factors from the library (cap is hardcoded per CLAUDE.md §3
+   anti-overfitting rule).
+2. Tune each factor's params (lookback, skip, etc.).
+3. Choose `equal_weight` (baseline) or `signed_ic_weighted` (auto weights
+   from trailing signed IC — handles inverted factors).
+4. Configure portfolio: `top_n` stocks held, rebalance frequency,
+   sector cap, single-name cap, min market cap, ST exclusion.
+5. Click **Backtest** → 30-90s on a 5-year CSI 300 window → result page
+   with equity curve, drawdown, fills table, full A-share-constraint
+   summary (Sharpe, Calmar, win rate, turnover, transaction costs).
 
 ### 6. Tests
 
@@ -259,13 +275,18 @@ A-Strategy-Engine/
 
 ## Factor library
 
-| ID | Name | Category | Status | Thesis |
+| ID | Name | Category | Real-data state | Thesis |
 |---|---|---|---|---|
-| 1.1 | `northbound_momentum` | flow | shipped | Cumulative Stock Connect inflows lead retail by 2-3 weeks |
-| 1.2 | `northbound_acceleration` | flow | Sprint 2 | Acceleration of foreign buying signals strengthening conviction |
-| 2.1 | `earnings_quality` | fundamental | Sprint 2 | Rising ROE backed by real OCF → outperformance |
-| 2.4 | `valuation_composite` | fundamental | Sprint 2 | Cheap on PE/PB/PS percentile outperforms |
-| 3.2 | `momentum_skip` | technical | Sprint 2 | Intermediate momentum (skip-5) per Liu-Stambaugh-Yuan 2019 |
+| 1.1 | `northbound_momentum` | flow | numerator real, float_cap synthetic | Cumulative Stock Connect inflows lead retail by 2-3 weeks |
+| 1.2 | `northbound_acceleration` | flow | numerator real, float_cap synthetic | Acceleration of foreign buying signals strengthening conviction |
+| 2.1 | `earnings_quality` | fundamental | **all real** (Sprint 3) | Rising ROE backed by real OCF → outperformance |
+| 2.4 | `valuation_composite` | fundamental | PE/PB/PS history still synthetic | Cheap on PE/PB/PS percentile outperforms |
+| 3.2 | `momentum_skip` | technical | **all real** | Intermediate momentum (skip-5) per Liu-Stambaugh-Yuan 2019 |
+
+⚠ **Empirical note**: `momentum_skip` evaluated on real CSI 300 / 2022-2025 has
+**IC ≈ −0.02** (statistically significant), confirming Liu/Stambaugh/Yuan 2019 §5
+that price momentum is inverted in A-shares. The `signed_ic_weighted` composite
+turns this into a short signal automatically. See `docs/STRATEGY.md` §2.
 
 Future sprints add Factors 1.3 (margin sentiment), 1.4 (龙虎榜 institutional),
 2.2, 2.3, 3.1, 3.3, 4.1, 4.2, 5.1, 5.2. See CLAUDE.md §4 for the catalogue.
