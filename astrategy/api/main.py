@@ -33,6 +33,11 @@ from astrategy.api.schemas import (
     FetchRequest,
     FetchResponse,
     FillRecord,
+    ChartCandle,
+    ChartLinePoint,
+    ChartMACDPoint,
+    ChartResponse,
+    ChartSignal,
     HealthResponse,
     HoldingResponse,
     PortfolioBacktestRequest,
@@ -442,6 +447,141 @@ def factor_correlation(
         universe=universe, start=start, end=end,
         rebalance=rebalance, n_dates=n_dates,
     )
+
+
+# --- Chart data (Sprint 4 — interactive stock chart) ---------------------
+
+@app.get(
+    "/api/chart/{code}",
+    response_model=ChartResponse,
+    tags=["chart"],
+)
+def get_chart_data(
+    code: str,
+    cache: Annotated[SQLiteCache, Depends(get_cache)],
+    storage: Annotated[RunStorage, Depends(get_storage)],
+    start: str = Query("2023-01-01"),
+    end: str = Query("2025-12-31"),
+    indicators: str = Query(
+        "ma_20,ma_60",
+        description=(
+            "Comma-separated indicator specs. Supported: ma_N, ema_N, rsi (defaults "
+            "to 14), macd (defaults 12/26/9)."
+        ),
+    ),
+    run_id: str | None = Query(
+        None,
+        description=(
+            "Optional portfolio backtest run_id. If supplied, the response includes "
+            "any entries/exits for this stock from that backtest as `signals`."
+        ),
+    ),
+) -> ChartResponse:
+    """OHLCV + computed indicators + (optionally) backtest signals for one stock."""
+    from astrategy.charts.indicators import (
+        compute_ema, compute_ma, compute_macd, compute_rsi,
+    )
+
+    bars = cache.get_daily_bars(code, start, end)
+    if bars.empty:
+        raise HTTPException(status_code=404, detail=f"no cached bars for {code}")
+    bars = bars.sort_values("date").reset_index(drop=True)
+    bars["date_str"] = pd.to_datetime(bars["date"]).dt.strftime("%Y-%m-%d")
+
+    candles = [
+        ChartCandle(
+            time=row["date_str"],
+            open=float(row["open"]), high=float(row["high"]),
+            low=float(row["low"]), close=float(row["close"]),
+            volume=float(row["volume"]),
+        )
+        for _, row in bars.iterrows()
+    ]
+
+    closes = bars.set_index("date_str")["close"].astype(float)
+
+    # Parse indicator specs
+    indicator_outputs: dict[str, list[ChartLinePoint]] = {}
+    macd_output: list[ChartMACDPoint] = []
+    for spec in (s.strip() for s in indicators.split(",") if s.strip()):
+        if spec.startswith("ma_"):
+            try:
+                period = int(spec.split("_", 1)[1])
+            except ValueError:
+                continue
+            ser = compute_ma(closes, period)
+            indicator_outputs[spec] = _series_to_points(ser)
+        elif spec.startswith("ema_"):
+            try:
+                period = int(spec.split("_", 1)[1])
+            except ValueError:
+                continue
+            ser = compute_ema(closes, period)
+            indicator_outputs[spec] = _series_to_points(ser)
+        elif spec == "rsi" or spec.startswith("rsi_"):
+            period = 14
+            if "_" in spec:
+                try:
+                    period = int(spec.split("_", 1)[1])
+                except ValueError:
+                    pass
+            ser = compute_rsi(closes, period)
+            indicator_outputs[spec] = _series_to_points(ser)
+        elif spec == "macd":
+            macd_df = compute_macd(closes)
+            for date, row in macd_df.iterrows():
+                macd_output.append(ChartMACDPoint(
+                    time=str(date),
+                    macd=_finite(row["macd"]),
+                    signal=_finite(row["signal"]),
+                    histogram=_finite(row["histogram"]),
+                ))
+
+    # Pull backtest signals if a run_id was supplied
+    signals: list[ChartSignal] = []
+    if run_id:
+        row = storage.get_run(run_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"run {run_id} not found")
+        for f in row["fills"]:
+            if f["code"] != code:
+                continue
+            signals.append(ChartSignal(
+                time=str(f["date"]),
+                side=f["side"],
+                price=float(f["price"]),
+                shares=int(f["shares"]),
+                cost=float(f["cost"]),
+                rejected_reason=f.get("rejected"),
+            ))
+
+    # Stock meta + sector
+    meta = cache.get_stock_meta(code) or {}
+    sector_map = cache.get_sectors([code])
+    sector = sector_map.get(code, {}).get("sw_l1_name")
+
+    return ChartResponse(
+        code=code, name=meta.get("name"), sector=sector,
+        candles=candles, indicators=indicator_outputs,
+        macd=macd_output, signals=signals, run_id=run_id,
+    )
+
+
+def _series_to_points(s: pd.Series) -> list[ChartLinePoint]:
+    return [
+        ChartLinePoint(time=str(idx), value=_finite(val))
+        for idx, val in s.items()
+    ]
+
+
+def _finite(v) -> float | None:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not (f == f) or f in (float("inf"), float("-inf")):  # NaN or inf
+        return None
+    return f
 
 
 # --- Live Screener (Sprint 4) ---------------------------------------------

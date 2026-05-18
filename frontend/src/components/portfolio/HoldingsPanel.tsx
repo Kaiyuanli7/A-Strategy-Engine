@@ -1,8 +1,10 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import type { HoldingRecord } from '@/types/api'
 
 interface Props {
   holdings: HoldingRecord[]
+  runId?: string         // if set, code links go to the chart with this run's signals
 }
 
 type SortKey = 'market_value' | 'pnl_pct' | 'shares' | 'code' | 'entry_date'
@@ -15,7 +17,7 @@ function yuan(v: number): string {
   return '¥' + Math.round(v).toLocaleString()
 }
 
-export default function HoldingsPanel({ holdings }: Props) {
+export default function HoldingsPanel({ holdings, runId }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>('market_value')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
@@ -85,7 +87,14 @@ export default function HoldingsPanel({ holdings }: Props) {
           <tbody>
             {sorted.map((h) => (
               <tr key={h.code}>
-                <td className="font-mono">{h.code}</td>
+                <td className="font-mono">
+                  <Link
+                    to={`/chart/${h.code}${runId ? `?run_id=${runId}` : ''}`}
+                    className="text-accent-blue hover:underline"
+                  >
+                    {h.code}
+                  </Link>
+                </td>
                 <td className="text-xs text-ink-600">{h.sector ?? '—'}</td>
                 <td className="text-right">{h.shares.toLocaleString()}</td>
                 <td className="text-right">¥{h.avg_cost.toFixed(2)}</td>

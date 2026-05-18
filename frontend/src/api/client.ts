@@ -1,4 +1,5 @@
 import type {
+  ChartResponse,
   EvaluateParams,
   FactorCorrelation,
   FactorEvaluation,
@@ -88,6 +89,20 @@ export const api = {
     req<WalkForwardRunListItem[]>('/api/walk_forward/runs'),
   walkForwardResult: (runId: string) =>
     req<WalkForwardResult>(`/api/walk_forward/runs/${runId}`),
+  chart: (code: string, opts: {
+    start?: string
+    end?: string
+    indicators?: string[]
+    run_id?: string
+  } = {}) => {
+    const qs = new URLSearchParams()
+    if (opts.start) qs.set('start', opts.start)
+    if (opts.end) qs.set('end', opts.end)
+    if (opts.indicators && opts.indicators.length > 0)
+      qs.set('indicators', opts.indicators.join(','))
+    if (opts.run_id) qs.set('run_id', opts.run_id)
+    return req<ChartResponse>(`/api/chart/${code}${qs.toString() ? '?' + qs.toString() : ''}`)
+  },
   screener: (opts: {
     factors: string[]
     composite_method?: 'equal_weight' | 'signed_ic_weighted' | 'fixed_weight'

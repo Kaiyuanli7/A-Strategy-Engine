@@ -128,6 +128,51 @@ class QuintileSummary(BaseModel):
     avg_turnover: float
 
 
+# --- Chart data (Sprint 4 — interactive stock chart) ---------------------
+
+class ChartCandle(BaseModel):
+    time: str            # YYYY-MM-DD
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+class ChartLinePoint(BaseModel):
+    time: str
+    value: float | None = None
+
+
+class ChartMACDPoint(BaseModel):
+    time: str
+    macd: float | None = None
+    signal: float | None = None
+    histogram: float | None = None
+
+
+class ChartSignal(BaseModel):
+    """One backtest-derived entry or exit on this stock."""
+    time: str
+    side: Literal["buy", "sell"]
+    price: float
+    shares: int
+    cost: float
+    reason: str | None = None         # for sells; backtest 'reason' field
+    rejected_reason: str | None = None
+
+
+class ChartResponse(BaseModel):
+    code: str
+    name: str | None = None
+    sector: str | None = None
+    candles: list[ChartCandle]
+    indicators: dict[str, list[ChartLinePoint]] = Field(default_factory=dict)
+    macd: list[ChartMACDPoint] = Field(default_factory=list)
+    signals: list[ChartSignal] = Field(default_factory=list)
+    run_id: str | None = None
+
+
 class ScreenerEntry(BaseModel):
     """One row in the live screener: composite + per-factor scores."""
     rank: int

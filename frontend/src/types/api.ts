@@ -239,6 +239,51 @@ export interface PortfolioRunListItem {
 }
 
 
+// --- Chart (Sprint 4) ------------------------------------------------------
+
+export interface ChartCandle {
+  time: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface ChartLinePoint {
+  time: string
+  value: number | null
+}
+
+export interface ChartMACDPoint {
+  time: string
+  macd: number | null
+  signal: number | null
+  histogram: number | null
+}
+
+export interface ChartSignal {
+  time: string
+  side: 'buy' | 'sell'
+  price: number
+  shares: number
+  cost: number
+  reason: string | null
+  rejected_reason: string | null
+}
+
+export interface ChartResponse {
+  code: string
+  name: string | null
+  sector: string | null
+  candles: ChartCandle[]
+  indicators: Record<string, ChartLinePoint[]>
+  macd: ChartMACDPoint[]
+  signals: ChartSignal[]
+  run_id: string | null
+}
+
+
 // --- Live Screener (Sprint 4) ----------------------------------------------
 
 export interface ScreenerEntry {
