@@ -410,6 +410,112 @@ class AKShareClient:
                 df[c] = pd.NA
         return df[["report_date", "rating", "target_price", "eps_estimate", "revenue_estimate"]].copy()
 
+    def get_quarterly_fundamentals(self, code: str) -> pd.DataFrame:
+        """
+        Quarterly fundamentals via AKShare's `stock_financial_abstract`.
+
+        AKShare returns indicator-wide format:
+            选项 | 指标         | 20260331 | 20251231 | 20250930 | ...
+            --- | ------------ | -------- | -------- | -------- | ---
+            盈利能力 | 净资产收益率 | 15.2    | 14.8    | 14.5    | ...
+
+        We pivot to long format (one row per (code, report_date)) and rename
+        a curated subset of indicators to our schema columns. announce_date
+        is estimated as report_date + 45 days (AKShare doesn't surface the
+        actual announce date per stock; 45 days is a conservative buffer).
+
+        Returns columns:
+            report_date, announce_date, roe_ttm, eps_ttm,
+            operating_cash_flow_ttm, net_income_ttm, revenue_yoy, net_profit_yoy.
+        PE/PB/PS columns are NOT populated (the endpoint doesn't expose them);
+        upsert_fundamentals tolerates missing values.
+
+        Returns empty DataFrame if the fetch fails or the response is unrecognized.
+        """
+        try:
+            self._sleep()
+            df = self._call_with_retry(self._ak.stock_financial_abstract, symbol=code)
+        except Exception as e:
+            log.warning("fundamentals fetch failed for %s: %s", code, e)
+            return pd.DataFrame()
+        return self._normalize_quarterly_fundamentals(df)
+
+    # Map of Chinese 指标 → our schema column. We accept multiple aliases
+    # for ROE since some AKShare versions use "(摊薄)" while others use
+    # "(加权)" or have no suffix at all.
+    _FUNDAMENTALS_INDICATOR_MAP: dict[str, str] = {
+        "净资产收益率": "roe_ttm",
+        "净资产收益率(摊薄)": "roe_ttm",
+        "净资产收益率(加权)": "roe_ttm",
+        "净资产收益率-摊薄": "roe_ttm",
+        "净资产收益率-加权": "roe_ttm",
+        "摊薄每股收益": "eps_ttm",
+        "基本每股收益": "eps_ttm",
+        "每股收益": "eps_ttm",
+        "经营活动产生的现金流量净额": "operating_cash_flow_ttm",
+        "经营现金流量净额": "operating_cash_flow_ttm",
+        "归属于母公司股东的净利润": "net_income_ttm",
+        "归属母公司股东净利润": "net_income_ttm",
+        "净利润": "net_income_ttm",
+        "营业总收入同比增长": "revenue_yoy",
+        "营业收入同比增长率": "revenue_yoy",
+        "营业总收入同比增长率": "revenue_yoy",
+        "归属于母公司股东的净利润同比增长": "net_profit_yoy",
+        "归属母公司股东的净利润同比": "net_profit_yoy",
+        "净利润同比增长率": "net_profit_yoy",
+    }
+
+    @classmethod
+    def _normalize_quarterly_fundamentals(cls, df: pd.DataFrame) -> pd.DataFrame:
+        """Pivot AKShare's indicator-wide format to one row per quarter."""
+        if df is None or df.empty:
+            return pd.DataFrame()
+        if "指标" not in df.columns:
+            log.warning("fundamentals: unrecognized response shape; columns=%s",
+                        list(df.columns)[:8])
+            return pd.DataFrame()
+        # Date columns are anything matching YYYYMMDD (8 digits).
+        date_cols = [c for c in df.columns
+                     if isinstance(c, str) and len(c) == 8 and c.isdigit()]
+        if not date_cols:
+            log.warning("fundamentals: no YYYYMMDD date columns in response")
+            return pd.DataFrame()
+
+        # Aggregate by indicator: keep the FIRST row per indicator that
+        # matches our schema (the endpoint sometimes ships duplicate indicator
+        # names across 选项 categories).
+        wanted = cls._FUNDAMENTALS_INDICATOR_MAP
+        per_indicator: dict[str, pd.Series] = {}
+        for _, row in df.iterrows():
+            ind = str(row["指标"]).strip()
+            schema_col = wanted.get(ind)
+            if schema_col is None or schema_col in per_indicator:
+                continue
+            per_indicator[schema_col] = row[date_cols]
+
+        if not per_indicator:
+            return pd.DataFrame()
+
+        # Pivot: rows = report dates (parsed from YYYYMMDD), cols = our schema
+        wide = pd.DataFrame(per_indicator)
+        wide.index = pd.to_datetime(wide.index, format="%Y%m%d", errors="coerce")
+        wide = wide[wide.index.notna()].sort_index()
+        wide.index.name = "report_date"
+        out = wide.reset_index()
+        out["report_date"] = out["report_date"].dt.strftime("%Y-%m-%d")
+        out["announce_date"] = (
+            pd.to_datetime(out["report_date"]) + pd.Timedelta(days=45)
+        ).dt.strftime("%Y-%m-%d")
+        # Ensure all schema cols exist even if missing in this stock's response
+        for col in ("roe_ttm", "eps_ttm", "operating_cash_flow_ttm",
+                    "net_income_ttm", "revenue_yoy", "net_profit_yoy"):
+            if col not in out.columns:
+                out[col] = pd.NA
+        keep = ["report_date", "announce_date", "roe_ttm", "eps_ttm",
+                "operating_cash_flow_ttm", "net_income_ttm",
+                "revenue_yoy", "net_profit_yoy"]
+        return out[keep].reset_index(drop=True)
+
     def get_daily_ohlcv(
         self,
         code: str,

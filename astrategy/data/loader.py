@@ -279,6 +279,35 @@ class DataLoader:
             current = date_type.fromordinal(current.toordinal() + 1)
         return total
 
+    def prime_fundamentals(
+        self,
+        codes: list[str],
+        force_refresh: bool = False,
+    ) -> dict[str, int]:
+        """
+        Fetch real quarterly fundamentals via AKShare's stock_financial_abstract
+        and upsert into the `fundamentals` table.
+
+        Returns dict mapping code → row count successfully upserted. Per-code
+        failures log a warning and yield 0 for that code; the loop continues.
+        """
+        results: dict[str, int] = {}
+        for code in tqdm(codes, desc="Fundamentals", unit="stock"):
+            if not force_refresh:
+                # Cache hit if we already have at least 4 quarters of fundamentals
+                existing = self.cache.get_fundamentals(code)
+                if not existing.empty and len(existing) >= 4:
+                    results[code] = len(existing)
+                    continue
+            try:
+                df = self.client.get_quarterly_fundamentals(code)
+            except Exception as e:
+                log.warning("fundamentals fetch failed for %s: %s", code, e)
+                results[code] = 0
+                continue
+            results[code] = self.cache.upsert_fundamentals(code, df)
+        return results
+
     def prime_analyst_estimates(self, codes: list[str]) -> dict[str, int]:
         """Fetch analyst rating snapshots (best-effort scaffold for Factor 2.3)."""
         results: dict[str, int] = {}
@@ -297,13 +326,23 @@ class DataLoader:
         codes: list[str],
         start: str,
         end: str,
+        skip_tables: frozenset[str] | None = None,
     ) -> dict[str, dict[str, int]]:
         """
-        Populate fundamentals + valuation + sector + northbound with synthetic
-        data. Used in sandboxed envs where AKShare is unreachable.
+        Populate fundamentals + valuation + sector + northbound + margin + lhb
+        with synthetic data. Used in sandboxed envs where AKShare is unreachable
+        and in real-mode priming to fill the tables that don't have real
+        fetchers yet.
 
-        Returns {code: {table_name: row_count}} for verification.
+        `skip_tables` lets callers exclude tables that already hold real data.
+        e.g., pass {'fundamentals', 'northbound_daily'} after priming real
+        fundamentals + northbound so the synthetic generator doesn't clobber
+        them.
+
+        Returns {code: {table_name: row_count}} for verification. Row counts
+        for skipped tables are reported as 0.
         """
+        skip = skip_tables or frozenset()
         from astrategy.data.synthetic import (
             generate_synthetic_fundamentals,
             generate_synthetic_lhb,
@@ -319,29 +358,42 @@ class DataLoader:
                 ohlcv.assign(date=ohlcv["date"].astype(str)) if not ohlcv.empty else None
             )
 
-            f = generate_synthetic_fundamentals(code, start, end)
-            v = generate_synthetic_valuation_daily(code, start, end, ohlcv_for_val)
-            n = generate_synthetic_northbound(code, start, end)
-            sec = generate_synthetic_sector(code)
+            f_n = v_n = n_n = m_n = l_n = s_n = 0
 
-            self.cache.upsert_fundamentals(code, f)
-            self.cache.upsert_valuation_daily(code, v)
-            self.cache.upsert_northbound(code, n)
-            self.cache.upsert_sector(
-                code,
-                sw_l1_name=sec["sw_l1_name"],
-                sw_l1_code=sec.get("sw_l1_code"),
-            )
-            margin_df = generate_synthetic_margin(code, start, end)
-            self.cache.upsert_margin_daily(code, margin_df)
-            lhb_rows = generate_synthetic_lhb(code, start, end)
-            self.cache.upsert_lhb_rows(lhb_rows)
+            if "fundamentals" not in skip:
+                f = generate_synthetic_fundamentals(code, start, end)
+                self.cache.upsert_fundamentals(code, f)
+                f_n = len(f)
+            if "valuation_daily" not in skip:
+                v = generate_synthetic_valuation_daily(code, start, end, ohlcv_for_val)
+                self.cache.upsert_valuation_daily(code, v)
+                v_n = len(v)
+            if "northbound_daily" not in skip:
+                n = generate_synthetic_northbound(code, start, end)
+                self.cache.upsert_northbound(code, n)
+                n_n = len(n)
+            if "sector" not in skip:
+                sec = generate_synthetic_sector(code)
+                self.cache.upsert_sector(
+                    code,
+                    sw_l1_name=sec["sw_l1_name"],
+                    sw_l1_code=sec.get("sw_l1_code"),
+                )
+                s_n = 1
+            if "margin_daily" not in skip:
+                margin_df = generate_synthetic_margin(code, start, end)
+                self.cache.upsert_margin_daily(code, margin_df)
+                m_n = len(margin_df)
+            if "lhb" not in skip:
+                lhb_rows = generate_synthetic_lhb(code, start, end)
+                self.cache.upsert_lhb_rows(lhb_rows)
+                l_n = len(lhb_rows)
             results[code] = {
-                "fundamentals": len(f),
-                "valuation_daily": len(v),
-                "northbound_daily": len(n),
-                "margin_daily": len(margin_df),
-                "lhb": len(lhb_rows),
-                "sector": 1,
+                "fundamentals": f_n,
+                "valuation_daily": v_n,
+                "northbound_daily": n_n,
+                "margin_daily": m_n,
+                "lhb": l_n,
+                "sector": s_n,
             }
         return results

@@ -92,23 +92,34 @@ def _prime_real(loader: DataLoader, args) -> dict:
     print(f"  {'✓' if real_nb else '✗'} Northbound: {nb_rows} rows across "
           f"{nb_ok}/{len(codes_with_names)} stocks ({'real' if real_nb else 'synthetic fallback below'})")
 
-    # 5. Synthetic fill-in for tables without a real fetcher yet
-    print(f"\n  → Filling in synthetic fundamentals + valuation + sector "
-          f"(no real fetchers wired yet)...")
-    synth_codes = [c for c, _ in codes_with_names]
-    extras = loader.prime_extras_synthetic(synth_codes, args.start, args.end)
-    counts["fundamentals_synth"] = sum(e["fundamentals"] for e in extras.values())
+    # 5. Real fundamentals via AKShare stock_financial_abstract
+    print(f"\n  → Priming real quarterly fundamentals...")
+    codes_only = [c for c, _ in codes_with_names]
+    fund_results = loader.prime_fundamentals(codes_only)
+    fund_total = sum(fund_results.values())
+    fund_ok = sum(1 for n in fund_results.values() if n >= 4)
+    counts["fundamentals_real_total"] = fund_total
+    counts["fundamentals_real_ok_stocks"] = fund_ok
+    real_fund = fund_ok > len(codes_only) * 0.5
+    print(f"  {'✓' if real_fund else '✗'} Fundamentals: {fund_total} rows across "
+          f"{fund_ok}/{len(codes_only)} stocks "
+          f"({'real' if real_fund else 'partial — many stocks missing fundamentals'})")
+
+    # 6. Synthetic fill-in for tables without a real fetcher yet.
+    # Skip tables we've already populated with real data so we don't clobber.
+    skip = {"fundamentals"}  # primed above
+    if real_nb:
+        skip.add("northbound_daily")
+    print(f"\n  → Filling in synthetic data for tables without real fetchers "
+          f"yet: valuation_daily, sector, margin_daily, lhb"
+          f"{'' if real_nb else ', northbound_daily (fallback)'}")
+    extras = loader.prime_extras_synthetic(
+        codes_only, args.start, args.end, skip_tables=frozenset(skip),
+    )
     counts["valuation_synth"] = sum(e["valuation_daily"] for e in extras.values())
     counts["sector_synth"] = sum(e["sector"] for e in extras.values())
-    # If real northbound succeeded broadly, keep it. The synthetic fill-in above
-    # also wrote northbound rows — overwrite back to real if we have it.
-    if real_nb:
-        for code in synth_codes:
-            # Re-fetch real northbound for any code that succeeded; this is cheap
-            # since prime_northbound_individual already cached the rows.
-            pass  # The cache already contains real rows; nothing to do.
-    print(f"  ⚠ Fundamentals/valuation/sector are SYNTHETIC — not real numbers.")
-    print(f"    Real fetchers for these land in Sprint 5+.")
+    print(f"  ⚠ valuation_daily + sector are SYNTHETIC.")
+    print(f"    Real daily PE/PB/PS history fetcher lands in Sprint 5+.")
 
     # 6. Index OHLCV (real)
     try:
