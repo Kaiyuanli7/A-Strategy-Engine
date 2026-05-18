@@ -3,6 +3,10 @@ import type {
   FactorEvaluation,
   FactorMeta,
   Health,
+  PortfolioBacktestRequest,
+  PortfolioBacktestResponse,
+  PortfolioResult,
+  PortfolioRunListItem,
   StockOHLCV,
   Universe,
 } from '@/types/api'
@@ -55,4 +59,12 @@ export const api = {
     if (params.use_cache !== undefined) qs.set('use_cache', String(params.use_cache))
     return req<FactorEvaluation>(`/api/factors/${name}/evaluate?${qs.toString()}`)
   },
+  runPortfolioBacktest: (body: PortfolioBacktestRequest) =>
+    req<PortfolioBacktestResponse>('/api/portfolios/backtest', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  portfolioResult: (runId: string) =>
+    req<PortfolioResult>(`/api/portfolios/runs/${runId}`),
+  portfolioRuns: () => req<PortfolioRunListItem[]>('/api/portfolios/runs'),
 }

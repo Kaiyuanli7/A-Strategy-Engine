@@ -123,3 +123,85 @@ export interface EvaluateParams {
   lookback?: number
   use_cache?: boolean
 }
+
+
+// --- Portfolio Backtest (Sprint 3) ------------------------------------------
+
+export interface FactorWeightSpec {
+  factor_name: string
+  params: Record<string, unknown>
+  weight: number | null
+}
+
+export interface CompositeSpec {
+  method: 'equal_weight' | 'signed_ic_weighted'
+  factors: FactorWeightSpec[]
+  rolling_window?: number
+  min_ic_abs?: number
+}
+
+export interface PortfolioConfigSpec {
+  top_n: number
+  rebalance_freq: 'weekly' | 'monthly'
+  max_sector_pct: number
+  max_single_position_pct: number
+  min_market_cap: number
+  exclude_st: boolean
+  weighting: 'equal'
+}
+
+export interface PortfolioBacktestRequest {
+  composite: CompositeSpec
+  portfolio: PortfolioConfigSpec
+  universe: string
+  start: string
+  end: string
+  initial_cash: number
+  limit_hit_fill_prob: number
+  random_seed: number
+}
+
+export interface PortfolioBacktestResponse {
+  run_id: string
+  status: 'completed' | 'failed'
+  summary: Record<string, unknown> | null
+  error: string | null
+}
+
+export interface EquityPoint {
+  date: string
+  equity: number
+}
+
+export interface FillRecord {
+  date: string
+  code: string
+  side: 'buy' | 'sell'
+  shares: number
+  price: number
+  cost: number
+  rejected_reason?: string | null
+}
+
+export interface PortfolioResult {
+  run_id: string
+  status: string
+  config: PortfolioBacktestRequest
+  summary: Record<string, unknown> | null
+  equity_curve: EquityPoint[]
+  fills: FillRecord[]
+  rejections: FillRecord[]
+  error: string | null
+}
+
+export interface PortfolioRunListItem {
+  run_id: string
+  status: string
+  strategy_type: string
+  universe_size: number
+  start: string
+  end: string
+  created_at: string
+  sharpe: number | null
+  total_return: number | null
+}

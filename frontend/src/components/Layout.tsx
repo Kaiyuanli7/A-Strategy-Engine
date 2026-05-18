@@ -25,6 +25,14 @@ export default function Layout() {
             >
               Factor Lab
             </NavLink>
+            <NavLink
+              to="/portfolio"
+              className={({ isActive }) =>
+                'nav-link' + (isActive ? ' nav-link-active' : '')
+              }
+            >
+              Portfolio
+            </NavLink>
           </nav>
           <div className="ml-auto text-xs text-ink-400 font-mono">
             {health ? (
