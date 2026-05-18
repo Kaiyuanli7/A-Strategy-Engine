@@ -57,7 +57,8 @@ export default function StockChart() {
 
   const [data, setData] = useState<ChartResponse | null>(null)
   const [err, setErr] = useState<string | null>(null)
-  const [selectedIndicators, setSelectedIndicators] = useState<string[]>(PRESETS.cn_standard)
+  // Indicators default OFF — this platform is about factor signals, not TA
+  const [selectedIndicators, setSelectedIndicators] = useState<string[]>([])
   const [rangeDays, setRangeDays] = useState<number | null>(180)
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null)
