@@ -9,6 +9,7 @@ venv/
 *.db-journal
 data/*.db
 data/evaluations/
+data/walk_forward/
 .DS_Store
 .idea/
 .vscode/
