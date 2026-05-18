@@ -40,6 +40,12 @@ export default function CompositeBuilder({ factors, spec, onChange }: Props) {
     onChange({ ...spec, factors })
   }
 
+  const setFactorWeight = (idx: number, value: number) => {
+    const factors = [...spec.factors]
+    factors[idx] = { ...factors[idx], weight: value }
+    onChange({ ...spec, factors })
+  }
+
   return (
     <div className="card space-y-3">
       <div className="flex items-baseline justify-between">
@@ -61,8 +67,22 @@ export default function CompositeBuilder({ factors, spec, onChange }: Props) {
             />
             Signed IC
           </label>
+          <label className="flex items-center gap-1">
+            <input
+              type="radio"
+              checked={spec.method === 'fixed_weight'}
+              onChange={() => updateMethod('fixed_weight')}
+            />
+            Fixed
+          </label>
         </div>
       </div>
+      {spec.method === 'fixed_weight' && (
+        <div className="text-xs text-ink-400 -mt-1">
+          Set an explicit weight per factor below. Negative weights invert the
+          factor (use for known-inverted factors like A-share price momentum).
+        </div>
+      )}
 
       <div className="space-y-2">
         {spec.factors.map((fw, idx) => {
@@ -97,6 +117,19 @@ export default function CompositeBuilder({ factors, spec, onChange }: Props) {
                       />
                     </label>
                   ))}
+                </div>
+              )}
+              {spec.method === 'fixed_weight' && (
+                <div className="mt-2 flex items-center gap-2 text-xs">
+                  <span className="metric-key">weight</span>
+                  <input
+                    type="number"
+                    className="w-24 border border-ink-200 rounded px-2 py-1 text-xs font-mono"
+                    value={fw.weight ?? 0}
+                    onChange={(e) => setFactorWeight(idx, Number(e.target.value))}
+                    step={0.05} min={-1} max={1}
+                  />
+                  <span className="text-ink-400">(negative = invert)</span>
                 </div>
               )}
             </div>

@@ -163,7 +163,7 @@ class FactorWeightSpec(BaseModel):
 
 class CompositeSpec(BaseModel):
     """Composite scoring config."""
-    method: Literal["equal_weight", "signed_ic_weighted"] = "equal_weight"
+    method: Literal["equal_weight", "signed_ic_weighted", "fixed_weight"] = "equal_weight"
     factors: list[FactorWeightSpec] = Field(..., min_length=1, max_length=5)
     rolling_window: int = Field(60, ge=10, le=252,
                                 description="signed_ic_weighted only: trailing IC window")

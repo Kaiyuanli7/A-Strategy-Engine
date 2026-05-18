@@ -43,6 +43,7 @@ from astrategy.api.storage import RunStorage
 from astrategy.composites import (
     EqualWeightComposite,
     FactorWeight,
+    FixedWeightComposite,
     SignedICWeightedComposite,
 )
 from astrategy.config import classify_board, is_st_name
@@ -462,6 +463,15 @@ def _build_composite(composite_spec, factor_weights):
             rolling_window=composite_spec.rolling_window,
             min_ic_abs=composite_spec.min_ic_abs,
         )
+    if composite_spec.method == "fixed_weight":
+        # Every FactorWeight must have an explicit weight set
+        for fw in factor_weights:
+            if fw.weight is None:
+                raise ValueError(
+                    f"fixed_weight composite requires explicit weights; "
+                    f"factor {fw.factor.name!r} has weight=None"
+                )
+        return FixedWeightComposite(factor_weights)
     raise ValueError(f"unknown composite method '{composite_spec.method}'")
 
 

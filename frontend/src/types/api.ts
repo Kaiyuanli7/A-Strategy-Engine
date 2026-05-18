@@ -134,7 +134,7 @@ export interface FactorWeightSpec {
 }
 
 export interface CompositeSpec {
-  method: 'equal_weight' | 'signed_ic_weighted'
+  method: 'equal_weight' | 'signed_ic_weighted' | 'fixed_weight'
   factors: FactorWeightSpec[]
   rolling_window?: number
   min_ic_abs?: number

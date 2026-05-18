@@ -16,10 +16,18 @@ the walk-forward runner.
 from astrategy.composites.base import Composite, FactorWeight
 from astrategy.composites.equal_weight import EqualWeightComposite
 from astrategy.composites.ic_weighted import SignedICWeightedComposite
+from astrategy.composites.fixed import FixedWeightComposite
+from astrategy.composites.optuna_fit import (
+    OptunaFitResult,
+    fit_composite_weights_optuna,
+)
 
 __all__ = [
     "Composite",
     "FactorWeight",
     "EqualWeightComposite",
     "SignedICWeightedComposite",
+    "FixedWeightComposite",
+    "OptunaFitResult",
+    "fit_composite_weights_optuna",
 ]
